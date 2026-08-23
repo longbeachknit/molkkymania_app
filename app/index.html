@@ -92,7 +92,7 @@ const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
 // 「7_10」や「7-10」→「7_10」と表示。読み取れないときは下の値を使います。
-const APP_VERSION_FALLBACK='1_2';
+const APP_VERSION_FALLBACK='1_3';
 const APP_VERSION=(function(){
   try{
     // 新しい名前（molkkymania_app_1_1.html）と、旧い名前（mölkky_final_8_4.html）の両対応
@@ -142,7 +142,7 @@ let S={
   sets:[],cur:0,fid:0,showHist:false,
   pFirst:null,pIdx:null,pOrders:[[],[]],
   pExclude:[[],[]],
-  iP:'',iM:'single',iA:'',useAimed:false,rule37Pending:false,_tiView:null,_tiLoading:false,_tiError:null,_tiSchedule:[],_tiRegulation:'',_tiSections:null,_tiPrelim:[],_tiPrelimQuery:'',_tiPrelimSelected:null,_tiBracket:null,_tiBracketSide:'left',
+  iP:'',iM:'single',iA:'',useAimed:false,rule37Pending:false,_tiView:null,_tiLoading:false,_tiError:null,_tiSchedule:[],_tiRegulation:'',_tiSections:null,_tiPrelim:[],_tiPrelimMatches:3,_tiPrelimQuery:'',_tiPrelimSelected:null,_tiBracket:null,_tiBracketSide:'left',
   prev:null,ssIdx:0,
   endPending:false,tieExtend:false,tlTieExtend:false,earlyEnd:false,
   molkoutWinner:null,
@@ -731,6 +731,22 @@ function parseCombinedId(id){
     teamA,teamB,
     combinedId:id.trim()
   };
+}
+
+/* 予選が何試合の大会かを決める（3試合か5試合かを自動で判定する）
+   ・スプレッドシート側(GAS)が prelimMatchCount を送ってきていれば、それをそのまま使う
+   ・送ってきていない古い大会は、予選④⑤のデータが入っているかを見て判定する
+   ・どちらも分からなければ、これまでどおり3試合として表示する */
+function prelimMatchCountOf(json){
+  const n=Number(json&&json.prelimMatchCount);
+  if(n>=1&&n<=9)return n;
+  let max=3;
+  ((json&&json.teams)||[]).forEach(t=>{
+    for(let m=1;m<=9;m++){
+      if(String(t['opp'+m]||'')!==''||String(t['p'+m+'a']||'')!==''||String(t['p'+m+'b']||'')!=='')max=Math.max(max,m);
+    }
+  });
+  return max;
 }
 
 async function fetchTournamentInfo(action){
@@ -1537,9 +1553,9 @@ function fmtEventPeriod(tour){
    取りに行くタイミングは次の3つだけ（通信量を減らすため）：
      ① ホーム画面を最初に開いたとき
      ② 他の画面から、ホームに戻ってきたとき
-     ③ ①②のあとも、前回から60秒たっていれば
+     ③ ①②のあとも、前回から3分たっていれば
    ==================================================================== */
-const LIVE_MIN_INTERVAL=60000;   // 60秒より短い間隔では取りに行かない
+const LIVE_MIN_INTERVAL=180000;  // 3分。これより短い間隔では取りに行かない
 const LIVE_RETRY_WAIT=15000;     // 通信に失敗したときは、15秒あけてから次を試す
 const LS_SEL_LIVE='mm12_selected_live';
 let _lastPhaseForLive='';        // 直前に見ていた画面（ホーム以外）
@@ -1606,7 +1622,7 @@ function maybeRefreshLiveEvent(){
     return;
   }
   if(backToHome&&waited>3000){refreshLiveEvent();return;}         // ②戻ってきた
-  if(waited>LIVE_MIN_INTERVAL)refreshLiveEvent();                 // ③60秒経過
+  if(waited>LIVE_MIN_INTERVAL)refreshLiveEvent();                 // ③3分経過
 }
 
 function sendRowViaImage(params){
@@ -3905,7 +3921,7 @@ function rAdminTourEdit(){
           <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏆 決勝トーナメントのチーム数</div>
           <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">決勝トーナメント表の形（ラウンド数・シードの有無）が自動で切り替わります。24・48チームでは上位チームが1回戦免除（シード）になります。</div>
           <select id="te-bracket-count" style="font-size:14px;">
-            ${[16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
+            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
           </select>
         </div>
       </div>
@@ -4890,6 +4906,37 @@ function rScoreView(){
       return 0;
     };
 
+    /* ★8-5 / 1-3：セットの点数の読み取り方を直した。
+       Supabase からは「setPts」という【並び】で届く（1セット目, 2セット目, …）。
+       8-4 までは「set1pts」という【名前】で探していたため何も見つからず、
+       どのセットも 0 対 0 と読めて、すべて「引き分け」と表示されていた。
+       ※ 念のため、スプレッドシート時代の古い名前も読めるようにしてある。 */
+    const setPtOf=(t)=>{
+      if(!t)return null;
+      let v;
+      if(Array.isArray(t.setPts)) v=t.setPts[setNo-1];
+      else v=t[`set${setNo}pts`];
+      return (v===null||v===undefined||v==='')?null:Number(v);
+    };
+    const fPts=setPtOf(fTeam);
+    const sPts=setPtOf(sTeam);
+
+    /* ★3ミス（失格）でセットが終わったときの見せ方。
+       失格した側は 0点、相手は 50点 として記録されているが、
+       投擲の積み上げ（合計欄）は、その手前の数字のまま残っている。
+         ・失格した側 … 最後のターンの合計欄を 0 にする
+         ・相手側     … 積み上げは書き換えず、1行下に 50 を出す
+       判定は「記録されたセット点数」と「積み上げの最後の数字」のズレで見る。
+       ふつうに 50点で上がったセットは一致するので、何も起こらない。 */
+    const lastTurnOf=(bucket)=>{let last=0;for(let t=1;t<=maxTurn;t++){if(bucket[t]&&bucket[t].length)last=t;}return last;};
+    const lastCumulOf=(bucket)=>{const t=lastTurnOf(bucket);return t?Number(bucket[t][bucket[t].length-1].cumul):null;};
+    const fLastTurn=lastTurnOf(fThrows), sLastTurn=lastTurnOf(sThrows);
+    const fLastCumul=lastCumulOf(fThrows), sLastCumul=lastCumulOf(sThrows);
+    const fZero =(fPts===0 &&fLastCumul!==null&&fLastCumul>0);
+    const sZero =(sPts===0 &&sLastCumul!==null&&sLastCumul>0);
+    const fFifty=(fPts===50&&fLastCumul!==null&&fLastCumul<50);
+    const sFifty=(sPts===50&&sLastCumul!==null&&sLastCumul<50);
+
     let rows2='';
     for(let t=1;t<=maxTurn;t++){
       const fT=fThrows[t]||[];const sT=sThrows[t]||[];
@@ -4902,8 +4949,11 @@ function rScoreView(){
       };
       const fCols=fMbrs.map(m=>dispTh(fT.find(th=>th.name===m)));
       const sCols=sMbrs.map(m=>dispTh(sT.find(th=>th.name===m)));
-      const fTot=fT.length?fT[fT.length-1].cumul:'';
-      const sTot=sT.length?sT[sT.length-1].cumul:'';
+      let fTot=fT.length?fT[fT.length-1].cumul:'';
+      let sTot=sT.length?sT[sT.length-1].cumul:'';
+      // ★3ミスで失格した側は、最後のターンの合計欄を 0 にする
+      if(fZero&&t===fLastTurn)fTot=0;
+      if(sZero&&t===sLastTurn)sTot=0;
       rows2+=`<tr>
         <td style="padding:2px 3px;border:1px solid #bbb;font-size:11px;text-align:center;color:#6b7280;">${t}</td>
         ${fCols.join('')}
@@ -4913,13 +4963,25 @@ function rScoreView(){
       </tr>`;
     }
 
+    // ★3ミスで勝った側の「50」を、合計欄の1行下に出す
+    if(fFifty||sFifty){
+      const blanks=(n)=>new Array(n).fill('<td style="padding:2px 3px;border:1px solid #bbb;"></td>').join('');
+      const fifty=(on,extra)=>`<td style="padding:2px 3px;border:1px solid #bbb;${extra}font-size:11px;font-weight:700;text-align:center;">${on?50:''}</td>`;
+      rows2+=`<tr>
+        <td style="padding:2px 3px;border:1px solid #bbb;"></td>
+        ${blanks(fMbrs.length)}
+        ${fifty(fFifty,'border-right:2.5px solid #aaa;')}
+        ${blanks(sMbrs.length)}
+        ${fifty(sFifty,'')}
+      </tr>`;
+    }
+
     const mhdr=(mbrs)=>mbrs.map(m=>`<th style="padding:2px 2px;border:1px solid #bbb;font-size:10px;background:#f8fafc;min-width:18px;"><div style="display:flex;flex-direction:column;align-items:center;">${[...m].map(c=>`<span style="line-height:1.3;font-size:10px;">${c}</span>`).join('')}</div></th>`).join('');
     const sl=`第${setNo}セット`;
 
-    // 勝者
-    const fPts=fTeam?Number(fTeam[`set${setNo}pts`]||0):0;
-    const sPts=sTeam?Number(sTeam[`set${setNo}pts`]||0):0;
-    const winner=fPts>sPts?fTeam:sPts>fPts?sTeam:null;
+    // 勝者（★セット点数は上で読み取り済み）
+    const fv=fPts===null?0:fPts, sv=sPts===null?0:sPts;
+    const winner=fv>sv?fTeam:sv>fv?sTeam:null;
     const resultHtml=winner?`<div style="padding:5px 8px;background:#f8fafc;border-top:1px solid #bbb;text-align:center;font-size:12px;font-weight:700;color:#111;">${winner.teamName} 勝利</div>`:`<div style="padding:5px 8px;background:#f8fafc;border-top:1px solid #bbb;text-align:center;font-size:12px;font-weight:700;color:#111;">引き分け</div>`;
 
     return`<div style="margin-bottom:16px;border:1px solid #bbb;border-radius:6px;overflow:hidden;">
@@ -6323,9 +6385,7 @@ function rTournamentInfo(){
           </div>
         </div>
         <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:10px;">各予選の結果</div>
-        ${setRow('予選①',sel.opp1,sel.p1a,sel.p1b)}
-        ${setRow('予選②',sel.opp2,sel.p2a,sel.p2b)}
-        ${setRow('予選③',sel.opp3,sel.p3a,sel.p3b)}
+        ${(()=>{const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];const n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);let h='';for(let m=1;m<=n;m++){h+=setRow('予選'+NUM[m-1],sel['opp'+m]||'',sel['p'+m+'a']||'',sel['p'+m+'b']||'');}return h;})()}
       `;
     }
     else if(q){
@@ -8710,7 +8770,7 @@ function bind(){
       } else if(view==='prelim'){
         const json=await fetchTournamentInfo('getPrelim');
         if(json.error)throw new Error('GAS: '+json.error);
-        S._tiPrelim=json.teams||[];
+        S._tiPrelim=json.teams||[];S._tiPrelimMatches=prelimMatchCountOf(json);
         // パーソナライズ済みなら自分のチームNoを自動入力して検索結果を表示
         const myP=getValidMyTeam(eventCode);
         if(myP&&myP.teamId){
@@ -9227,7 +9287,7 @@ function bind(){
     try{
       const json=await fetchTournamentInfo('getPrelim');
       if(json.error)throw new Error('GAS: '+json.error);
-      S._tiPrelim=json.teams||[];
+      S._tiPrelim=json.teams||[];S._tiPrelimMatches=prelimMatchCountOf(json);
     }catch(e){S._tiError='取得に失敗しました: '+e.message;}
     S._tiLoading=false;render();
   };
