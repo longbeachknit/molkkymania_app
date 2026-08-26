@@ -4852,10 +4852,25 @@ function rScoreView(){
       <div style="text-align:center;padding:48px;color:#6b7280;"><div style="font-size:24px;">⏳</div><div>読み込み中...</div></div>
     </div>`;
   }
-  if(!ss.scoreData)return'<div style="padding:20px;">データなし</div>';
+  /* ★ここは以前「戻る」ボタンが無く、行き止まりになっていた。
+     投擲データの無い試合を開くと、アプリをいったん消すまで先へ進めなかった。
+     読み込み中の画面と同じ見出し（戻るボタン付き）を出すようにした。
+     ボタンのidは読み込み中の画面と同じなので、押したときの動きは共通で効く。 */
+  const ssEmpty_=(msg)=>`<div style="padding:8px 0 4px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
+      <button class="btn btn-gray btn-sm" id="btn-bk-score-view">← 戻る</button>
+      <div style="font-size:16px;font-weight:700;">スコアシート</div>
+    </div>
+    <div style="text-align:center;padding:40px 20px;">
+      <div style="font-size:30px;margin-bottom:10px;">📭</div>
+      <div style="font-size:15px;color:#6b7280;">${msg}</div>
+      <div style="font-size:12.5px;color:#9ca3af;margin-top:10px;line-height:1.7;">左上の「← 戻る」で試合一覧にもどれます。</div>
+    </div>
+  </div>`;
+  if(!ss.scoreData)return ssEmpty_('スコアシートを読み込めませんでした');
 
   const {rows,teams,matchId}=ss.scoreData;
-  if(!rows||rows.length===0)return`<div style="padding:20px;color:#9ca3af;">投擲データがありません</div>`;
+  if(!rows||rows.length===0)return ssEmpty_('この試合の投擲データはありません');
 
   // セット数を特定
   const setNos=[...new Set(rows.map(r=>r.setNo))].sort((a,b)=>a-b);
