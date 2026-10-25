@@ -92,7 +92,10 @@ const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
 // 「7_10」や「7-10」→「7_10」と表示。読み取れないときは下の値を使います。
-const APP_VERSION_FALLBACK='1_3';
+const APP_VERSION_FALLBACK='1_5';
+// ※公開ページでは、ファイル名がいつも index.html なので上の読み取りができません。
+//   そのため、公開ページに出るのは【必ずこの予備の値】です。
+//   新しい版を作ったら、ここの数字も必ず書き換えること。
 const APP_VERSION=(function(){
   try{
     // 新しい名前（molkkymania_app_1_1.html）と、旧い名前（mölkky_final_8_4.html）の両対応
@@ -142,7 +145,9 @@ let S={
   sets:[],cur:0,fid:0,showHist:false,
   pFirst:null,pIdx:null,pOrders:[[],[]],
   pExclude:[[],[]],
-  iP:'',iM:'single',iA:'',useAimed:false,rule37Pending:false,_tiView:null,_tiLoading:false,_tiError:null,_tiSchedule:[],_tiRegulation:'',_tiSections:null,_tiPrelim:[],_tiPrelimMatches:3,_tiPrelimQuery:'',_tiPrelimSelected:null,_tiBracket:null,_tiBracketSide:'left',
+  iP:'',iM:'single',iA:'',useAimed:false,rule37Pending:false,_tiView:null,_tiLoading:false,_tiError:null,_tiSchedule:[],_tiRegulation:'',_tiSections:null,_tiPrelim:[],_tiPrelimMatches:3,_tiPrelimQuery:'',_tiPrelimSelected:null,_tiBracket:null,_tiBracketSide:'left',_tiBracketNo:1,
+  // 交流戦の参加申請
+  _exhOpen:false,_exView:'team',_exTeamNo:'',_exTeamName:'',_exGame:null,_exSubmitting:false,_exError:'',
   prev:null,ssIdx:0,
   endPending:false,tieExtend:false,tlTieExtend:false,earlyEnd:false,
   molkoutWinner:null,
@@ -626,6 +631,8 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.eventName!==undefined)tour.eventName=data.eventName;
   if(data.displayName!==undefined)tour.displayName=data.displayName;
   if(data.priority!==undefined)tour.priority=data.priority;
+  // 試合形式。届いていない（古い配信）ときはチーム戦のまま
+  if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
   if(data.tourneyRules!==undefined)tour.tourneyRules=data.tourneyRules;
   if(data.roundRules!==undefined)tour.roundRules=data.roundRules;
@@ -634,6 +641,10 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.eventPeriodEnd!==undefined)tour.eventPeriodEnd=data.eventPeriodEnd;
   if(data.receptionPw!==undefined)tour.receptionPw=data.receptionPw;
   if(data.bracketTeamCount!==undefined)tour.bracketTeamCount=Number(data.bracketTeamCount)||64;
+  if(data.bracket1Name!==undefined)tour.bracket1Name=data.bracket1Name;
+  if(data.bracket2TeamCount!==undefined)tour.bracket2TeamCount=Number(data.bracket2TeamCount)||0;
+  if(data.bracket2Name!==undefined)tour.bracket2Name=data.bracket2Name;
+  if(data.exhibition!==undefined)tour.exhibition=data.exhibition;
   if(data.sheetUrl!==undefined)tour.sheetUrl=data.sheetUrl;
   if(data.gasUrl)tour.gasUrl=data.gasUrl; // 空で上書きして消さないよう、値がある時だけ反映
   if(data.systemChart!==undefined)tour.systemChart=data.systemChart;
@@ -754,7 +765,7 @@ async function fetchTournamentInfo(action){
   //   ・スケジュール/レギュ(_info.json) … raw.githubusercontent から読む（レート制限実質なし）
   //   ・予選結果(_prelim.json) ………… api.github.com から読む（各端末60回/時の制限あり・即時性重視）
   //   返り値の形は旧GASと同じ（{schedule} / {sections} / {teams}）に保つので呼び出し側は無変更。
-  const tour=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):activeTour();
+  const tour=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):tiTour();
   if(!tour){ throw new Error('対象の大会が見つかりません。'); }
 
   const fileCode=toJsonFileCode(tour.eventCode||'');
@@ -775,7 +786,13 @@ async function fetchTournamentInfo(action){
     transform=d=>({ teams:(d&&d.teams)||[] });
   }else if(action==='getBracket'){
     kind='bracket';
-    transform=d=>({ rounds:(d&&d.rounds)||[] });
+    transform=d=>({ rounds:(d&&d.rounds)||[], title:(d&&d.title)||'' });
+  }else if(action==='getBracket2'){
+    /* ★2つめのトーナメント（Bトーナメント）。
+       対戦表D以降のGASが配信し、同期の道具が種類「bracket2」としてデータベースに入れる。
+       古い大会にはこの書類が無いので、その場合は「まだ配信されていません」と表示される。 */
+    kind='bracket2';
+    transform=d=>({ rounds:(d&&d.rounds)||[], title:(d&&d.title)||'' });
   }else{
     throw new Error('未知のaction: '+action);
   }
@@ -793,6 +810,23 @@ async function fetchTournamentInfo(action){
     await new Promise(r=>setTimeout(r,500));
     return await doFetch();
   }
+}
+
+/* トーナメント表を読み込んで表示する。
+   no=1 … トーナメント①（ふつうは決勝トーナメント。{大会コード}_bracket）
+   no=2 … トーナメント②（ふつうはBトーナメント。{大会コード}_bracket2）
+   ※トーナメントが1つだけの大会では no=1 しか使われないので、今までの大会は今までどおり動く。 */
+async function loadBracketNo(no){
+  S._tiBracketNo=(no===2?2:1);
+  S._tiView='bracket';S._tiLoading=true;S._tiError=null;S._tiBracket=null;
+  render();
+  try{
+    const json=await fetchTournamentInfo(S._tiBracketNo===2?'getBracket2':'getBracket');
+    if(json.error)throw new Error('GAS: '+json.error);
+    S._tiBracket={rounds:json.rounds||[]};
+  }catch(e){S._tiError='取得に失敗しました: '+e.message;}
+  if(S._tiView!=='bracket')return;
+  S._tiLoading=false;render();
 }
 
 // 受付データの送信／確認（試合情報と同じ tour.gasUrl 経由・キャッシュなし）
@@ -888,7 +922,7 @@ function triggerTeamsCSV(){
     const text=await file.text();
     const imported=importTeamsCSV(text);
     if(!imported.length){
-      alert('チームデータが見つかりませんでした。\nA列:チームNo、B列:チーム名、C〜G列:メンバー の形式か確認してください。');
+      alert('チームデータが見つかりませんでした。\nA列:チームNo、B列:チーム名、C〜G列:メンバー の形式か確認してください。\n（シングルス大会の場合は B列=モルックネーム、C列=本名フルネーム）');
       return;
     }
     const mode=confirm(imported.length+'件のチームを読み込みました。\n\nOK → 既存データを上書き\nキャンセル → 既存データに追加');
@@ -913,17 +947,67 @@ function makeTournament(overrides){
     gasUrl:'',
     sheetUrl:'',
     priority:'tournament',
+    // 試合形式：'team'＝チーム戦 / 'singles'＝シングルス（1人で出る大会）
+    // 未設定の大会（過去のデータを含む）は 'team'＝チーム戦として扱う
+    matchType:'team',
     matchRules:[],tourneyRules:[],roundRules:[],
     teams:[],matches:[],
     eventPeriodStart:'',eventPeriodEnd:'',
     receptionPw:'',
-    bracketTeamCount:64,
+    bracketTeamCount:64,            // トーナメント①（決勝トーナメント）のチーム数
+    bracket1Name:'決勝トーナメント',  // トーナメント①のアプリでの表示名
+    bracket2TeamCount:0,            // トーナメント②（Bトーナメント）のチーム数。0＝②は無い大会
+    bracket2Name:'Bトーナメント',    // トーナメント②のアプリでの表示名
+    // 交流戦の参加申請（希望者だけが出るしくみ）
+    //   enabled … 申請フォームを作るかどうか
+    //   count   … 交流戦の試合数
+    //   games   … 各試合の名前と説明（説明は参加者の選択画面に出る）
+    exhibition:{enabled:false,count:2,games:[{name:'交流戦①',desc:''},{name:'交流戦②',desc:''}]},
     systemChart:null,
     venue:null, // 会場の詳細（{code,name,detail}）。配信JSONに同梱して参加者へ届く
     tourInfo:{rules:'',notes:''}, // 大会の詳細（大会規約・大会における注意点）。配信JSONに同梱して参加者へ届く
     folderId:null,lastUsedAt:0, // 管理者の整理用（フォルダ分け・最近使った順）
     courtLayout:{grid:'',labelTop:'',labelBottom:'',labelLeft:'',labelRight:'',centerLabel:{text:'',pos:'bottom'}}
   },overrides);
+}
+
+/* ===== シングルス大会かどうかの判定 =====
+   大会設定の matchType が 'singles' のときだけシングルス扱いにする。
+   未設定（過去の大会データ）は 'team'＝チーム戦。 */
+function isSinglesTour(tour){return !!tour&&String((tour&&tour.matchType)||'team')==='singles';}
+function isSinglesActive(){try{return isSinglesTour(activeTour());}catch(e){return false;}}
+/* 【1-5・8-7にそろえた】大会コードから大会を探す。 */
+function tourByCode(code){
+  if(!code)return null;
+  return (AD.tournaments||[]).find(t=>String(t.eventCode)===String(code))||null;
+}
+/* 【1-5・8-7にそろえた】大会情報の画面（会場・大会の詳細・スケジュール・レギュ・No検索・トーナメント表・予選結果・残り試合数）が
+   いま見ている大会。大会カードのボタンから開いたときは、そのカードの大会。
+   指定がなければ、これまでどおり「いまの大会」。 */
+function tiTour(){
+  const t=tourByCode(S._tiEventCode);
+  if(t)return t;
+  return (AD.tournaments&&AD.activeTourId)?(AD.tournaments.find(x=>x.id===AD.activeTourId)||null):null;
+}
+/* 【1-5・8-7にそろえた】対戦相手／対戦コートの検索画面が、いま見ている大会。
+   指定がなければ、これまでどおり開催中の大会。 */
+function csTour(){return tourByCode(S._csEventCode)||activeTour()||null;}
+/* 【1-5・8-7にそろえた】その大会が「いま開催中」かどうか（この端末が見ている開催中の大会）。 */
+function isLiveEventCode(code){return !!code&&String(code)===String(S._liveEventCode||'');}
+/* 画面の言い方を「チーム」「選手」で切り替えるための道具。
+     wTeam()      … いま開催中の大会で判断する（対戦コート検索・予選結果など）
+     wTeam(tour)  … 渡された大会で判断する（スコアシート検索など、大会を選ぶ画面）
+   シングルスでない大会・分からない大会は、これまでどおり「チーム」。 */
+function wTeam(tour){return (tour===undefined?isSinglesActive():isSinglesTour(tour))?'選手':'チーム';}
+/* 成績閲覧など「大会コード（01_0601 形式）」しか手元に無い場面用。
+   getEventName と同じ探し方で大会を見つけ、シングルスかどうかを返す。 */
+function isSinglesEventCode(eventCode){
+  if(!eventCode)return false;
+  const parts=String(eventCode).split('_');
+  let tour=null;
+  if(parts.length>=2)tour=AD.tournaments&&AD.tournaments.find(t=>t.venueCode===parts[0]&&t.eventCode===parts[1]);
+  if(!tour)tour=AD.tournaments&&AD.tournaments.find(t=>t.eventCode===eventCode||t.eventCode===parts[parts.length-1]);
+  return isSinglesTour(tour);
 }
 
 function loadAdmin(){
@@ -943,9 +1027,11 @@ function loadAdmin(){
         d.activeTourId=d.activeTourId||'tour_default';
       }
       if(!d.ruleTemplates)d.ruleTemplates=[];
+      if(!d.chartTemplates)d.chartTemplates=[]; // 試合システム図のテンプレート保存用
       if(!d.venueTemplates)d.venueTemplates=[]; // 会場詳細のテンプレート保存用
       if(!d.folders)d.folders=[]; // 大会整理用フォルダ
       if(!d.githubPat)d.githubPat='';
+      if(!Array.isArray(d.upcomingKeys))d.upcomingKeys=[]; // 【1-5】開催前（次）の大会（新アプリ用・Supabase に書いた控え）
       return d;
     }
   }catch(e){}
@@ -954,7 +1040,9 @@ function loadAdmin(){
     tournaments:[],
     activeTourId:null,
     activeEventCode:'',
+    upcomingKeys:[],   // 【1-5】開催前（次）の大会（新アプリ用）
     ruleTemplates:[],
+    chartTemplates:[],
     githubPat:''
   };
 }
@@ -1085,6 +1173,8 @@ async function submitReception(payload){
     q3:payload.q3,
     q4:payload.q4,
     needsDesk:payload.needsDesk,
+    // シングルス大会なら true。受付シートの列の寄せ方（❶❷が無い分を左へ詰める）が変わる
+    isSingles:isSinglesActive(),
     at:new Date().toISOString()
   })});
   const res=await fetch(gasUrl,{method:'POST',mode:'cors',body});
@@ -1192,7 +1282,8 @@ function findTourByScoreEvent(ec){
 }
 
 function runCourtSearch(teamNo,matchCode){
-  const searchSrc=(activeTour()||{matches:[]}).matches||[];
+  // 【1-5・8-7にそろえた】いま検索対象にしている大会の対戦カードから探す
+  const searchSrc=(csTour()||{matches:[]}).matches||[];
   const results=searchSrc.filter(m=>{
     const mparts=m.matchId.split('_');
     const mCode=mparts[2]||'';
@@ -1590,7 +1681,13 @@ async function refreshLiveEvent(){
       const row=pickLiveRow(list);
       if(row){
         const code=String(row.event_code||'');
-        await syncAllFromGitHub(String(row.event_key||code));
+        /* ★2026-10-05 変更：ここで「設定」と「対戦カード」の両方を取っていたが、
+             ホーム画面は対戦カードを1つも使っていない。
+             対戦カードは「対戦相手を検索」を開いたときに取り直しているので、
+             ここでは設定だけにした。
+             これでホームを開くたびの読み取りが1回ぶん減る
+             （GitHubを読めるのは1つの回線あたり1時間60回までなので、これが効く）。 */
+        await syncSettingsFromGitHub(String(row.event_key||code));
         const t=(AD.tournaments||[]).find(x=>String(x.venueCode||'')===String(row.venue_code||'')&&String(x.eventCode||'')===code)
               ||(AD.tournaments||[]).find(x=>String(x.eventCode||'')===code);
         if(t){AD.activeTourId=t.id;saveAdmin(AD);S._liveTourId=t.id;}else{S._liveTourId=null;}
@@ -1603,6 +1700,24 @@ async function refreshLiveEvent(){
       // 通信できず、まだ一度も取れていない。「読み込み中…」のまま止まらないよう、
       // いったん「開催中なし」として表示を確定させる（次の機会にまた取りに行く）。
       S._liveEventCode='';
+    }
+    /* 【1-5・8-7にそろえた】開催前（次）の大会。
+       開催中リストとは別の表（upcoming_events）にあり、いくつでも入れられる。
+       ホームで必要なのは大会名・会場・日付・選手一覧＝「設定」だけなので、
+       ここは設定だけ取って、対戦カードは「対戦相手を検索」を押したときに取る。
+
+       ここでは「いまの大会（activeTourId）」は変えない。
+       変えてしまうと、受付の相手などが次の大会にすり替わってしまうため。
+       通信に失敗（null）したときは、前に出していたカードをそのまま残す。 */
+    const ups=await fetchUpcomingEvents();
+    if(ups){
+      const liveCode=String(S._liveEventCode||'');
+      const list=ups.filter(r=>String(r.event_code||'')&&String(r.event_code||'')!==liveCode);
+      for(const r of list){
+        try{await syncSettingsFromGitHub(String(r.event_key||r.event_code));}catch(e){}
+      }
+      S._upcomingEvents=list;
+      S._upcomingRaw=ups;   // 管理画面用（開催中と重なっているものも含めた、そのままのリスト）
     }
   }catch(e){/* 取得失敗時は前回の値を維持 */}
   finally{
@@ -2367,7 +2482,7 @@ function render(){
   const app=document.getElementById('app');
   const p=S.phase;
   // 【1-2】ホーム以外の画面に移ったことを覚えておく（戻ってきたときに最新を取りに行くため）
-  if(p!=='setup')_lastPhaseForLive=p;
+  if(p!=='setup'){_lastPhaseForLive=p;_exhWasAway=true;}
   if(p==='setup')app.innerHTML=rSetup();
   else if(p==='firstChoice')app.innerHTML=rFirst();
   else if(p==='orderSetup')app.innerHTML=rOrder();
@@ -2397,6 +2512,7 @@ function render(){
   else if(p==='rcpFinal')app.innerHTML=rRcpFinal();
   else if(p==='rcpDone')app.innerHTML=rRcpDone();
   else if(p==='tournamentInfo')app.innerHTML=rTournamentInfo();
+  else if(p==='exhibition')app.innerHTML=rExhibition();
   else if(p==='scoreSearch')app.innerHTML=rScoreSearch();
   else if(p==='scoreMatchList')app.innerHTML=rScoreMatchList();
   else if(p==='scoreView')app.innerHTML=rScoreView();
@@ -2410,6 +2526,8 @@ function render(){
   else if(p==='beginner')app.innerHTML=rBeginner();
   bind();
   saveMatchState();
+  scPaintAll();   // 【8-6】試合システム図の矢印を、表の上に重ねて描く
+  setTimeout(scPaintAll,120);   // 文字の読み込みで幅が変わったときの描き直し
   if(p==='orderSetup')setTimeout(bindDrag,0);
 }
 
@@ -2780,7 +2898,7 @@ function rBeginner(){
     +P('当日の流れは、「受付する → コートに行く → 試合を始める → 点数を入れる → 結果を送る」です。順番に見ていきましょう。')
 
     +appStep('6-1','まず「受付」をします',
-      P('ホーム画面の '+KEY('📝 大会受付（チーム登録）')+' を押します。')
+      P('ホーム画面の '+KEY('📝 大会受付（'+(isSinglesActive()?'選手':'チーム')+'登録）')+' を押します。')
       +STEP(['チームナンバー、またはチーム名で、自分のチームを選びます',
              '受付パスワード（数字4桁）を入力します<br>パスワードは会場に掲示しています。分からなければスタッフにお聞きください',
              'いくつかの質問にお答えいただいて、受付完了です'])
@@ -2842,7 +2960,7 @@ function rBeginner(){
          ['<b>次の試合は何時から？</b>','🕐 タイムスケジュール'],
          ['<b>あと何回勝てば優勝？</b>','📊 残り試合数を確認'],
          ['<b>予選の順位は？</b>','🏅 予選結果を確認'],
-         ['<b>トーナメントの状況は？</b>','🏆 決勝トーナメント表'],
+         ['<b>トーナメントの状況は？</b>','🏆 トーナメント表'],
          ['<b>チームナンバーが分からない</b>','🪪 チームNoを検索'],
          ['<b>トイレ・駐車場・行き方は？</b>','📍 会場の詳細'],
          ['<b>自分の成績を見たい</b>','📊 成績を見る'],
@@ -2876,6 +2994,25 @@ function rBeginner(){
 }
 
 
+/* 【8-7】大会カードの中のボタン。開催中の大会でも、開催前（次）の大会でも同じものを出す。
+   どのカードのボタンかは data-evcode（その大会のコード）で見分ける。
+   「対戦相手を検索」だけ横長（左右の幅を結合）にして、一番下に置く。 */
+function eventCardBtnsHtml(tour,theme){
+  const code=String((tour&&tour.eventCode)||'');
+  const w=isSinglesTour(tour)?'選手':'チーム';
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const b=(cls,label,wide)=>`<button class="${cls}" data-evcode="${esc(code)}" style="${wide?'grid-column:1 / -1;':''}padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">${label}</button>`;
+  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+    ${b('card-btn-venue','📍 会場の詳細')}
+    ${b('card-btn-tourinfo','📋 大会の詳細')}
+    ${b('card-btn-schedule','🕐 タイムスケジュール')}
+    ${b('card-btn-regulation','📜 レギュレーション')}
+    ${b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
+    ${b('card-btn-sheet','📑 大会スプレッドシート')}
+    ${b('card-btn-opponent','🔍 対戦相手を検索',true)}
+  </div>`;
+}
+
 function rSetup(){
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
@@ -2902,6 +3039,35 @@ function rSetup(){
   const _period=fmtEventPeriod(_liveTour);
   // 大会カードのテーマ色：場所に設定があればその色、無ければ既定のゴールド
   const _theme=(_venue&&_venue.themeColor)?_venue.themeColor:'#FFC93D';
+  /* 交流戦の参加申請ボタン（★2026-10-05 変更：交流戦ごとに分けた）
+     ・大会設定で「申請フォームを作る」にしてあること
+     ・対戦表で「交流戦の受付を開始する（番号を選ぶ）」でその番号を開始してあること
+     の両方がそろった交流戦だけ、名前入りのボタンが出る。
+     これで「いま何を募集しているのか」がボタンを見れば分かる。
+     タイムスケジュールに時間が書いてあれば、ボタンにも時間を添える。
+
+     受付の状況を確かめられなかったとき（通信が詰まった・GitHubの読み取り
+     回数の上限に当たった等）は、ボタンを出さずに「確認できませんでした」と
+     出す。終了したはずのボタンが残ってしまうより、こちらのほうが事故が少ない。 */
+  const _exh=exhOf(_liveTour);
+  if(_liveTour&&_exh.enabled)maybeRefreshExhibitionOpen(_liveTour.eventCode);
+  const _exhOpenList=(_liveTour&&_exh.enabled)
+    ? _exh.games.map((g,i)=>({i:i,name:g.name})).filter(x=>exhGameIsOpen_(x.i))
+    : [];
+  /* 時間の出どころ。
+     新しい対戦表なら、受付オン・オフと一緒に時間も届いているので何も読まない。
+     古い対戦表のときだけ、これまでどおりタイムスケジュールを読みにいく。 */
+  if(_exhOpenList.length&&_liveTour&&S._exhHasTimes!==true)maybeLoadExhSchedule(_liveTour.eventCode);
+  const _exhBtn=(_liveTour&&_exh.enabled&&_exh.games.length)
+    ? (_exhOpenList.length
+        ? _exhOpenList.map(x=>{
+            const _t=exhTimeOf_(x.i,x.name);
+            return`<button class="btn-go-exhibition" data-i="${x.i}" style="width:100%;margin-top:8px;padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_theme};border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.6;">${escH(x.name)}の参加申請はこちら（受付中）${_t?`<br><span style="font-size:11px;font-weight:700;color:#6b7280;">🕐 ${escH(_t)}</span>`:''}</button>`;
+          }).join('')
+        : (S._exhUnknown===true
+            ? `<div style="margin-top:8px;padding:10px 12px;background:#f3f4f6;border-radius:10px;font-size:11px;color:#6b7280;line-height:1.7;">いま交流戦の受付状況を確認できませんでした。<br>少し時間をおいて、もう一度ホーム画面を開いてください。</div>`
+            : ''))
+    : '';
   const _themeBg=_theme+'2E';   // 背景ハイライト（薄め）
   const _themeSoft=_theme+'4D'; // 受付済みボックス（やや濃いめ）
   const _showVenueDetail=venueHasDetail(_venue);
@@ -2911,7 +3077,7 @@ function rSetup(){
     ?`<div style="margin-bottom:20px;padding:14px 16px;background:#E1F5EE;border-radius:14px;display:flex;align-items:center;gap:12px;">
         <span style="font-size:26px;">👤</span>
         <div style="flex:1;">
-          <div style="font-size:12px;color:#0a6e57;">受付済みチーム</div>
+          <div style="font-size:12px;color:#0a6e57;">受付済み${isSinglesActive()?'選手':'チーム'}</div>
           <div style="font-size:17px;font-weight:800;color:#085041;line-height:1.3;">${_myTeamObj?_myTeamObj.name:'No.'+_my.teamId}</div>
           ${_myTeamObj?`<div style="font-size:12px;color:#0a6e57;">No.${_my.teamId}</div>`:''}
         </div>
@@ -2919,7 +3085,7 @@ function rSetup(){
       </div>`
     :`<button id="btn-go-reception" style="width:100%;padding:24px 20px;font-size:20px;font-weight:700;margin-bottom:20px;background:#FFCB3D;color:#2b2100;border:none;border-radius:14px;display:flex;align-items:center;gap:14px;cursor:pointer;">
         <span style="font-size:32px;">📝</span>
-        <div style="text-align:left;font-size:20px;font-weight:700;">大会受付（チーム登録）</div>
+        <div style="text-align:left;font-size:20px;font-weight:700;">大会受付（${isSinglesActive()?'選手':'チーム'}登録）</div>
       </button>`;
 
   // 開催中：左＝大会情報／右＝縦長の受付 or 受付済み、下＝詳細を見る
@@ -2934,7 +3100,7 @@ function rSetup(){
       </div>`
     :`<button id="btn-go-reception" style="flex-shrink:0;width:104px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;padding:14px 8px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;cursor:pointer;text-align:center;line-height:1.3;">
         <span style="font-size:30px;">📝</span>
-        <span style="font-size:15px;font-weight:800;">受付<br><span style="font-size:11px;font-weight:700;">（チーム登録）</span></span>
+        <span style="font-size:15px;font-weight:800;">受付<br><span style="font-size:11px;font-weight:700;">（${isSinglesActive()?'選手':'チーム'}登録）</span></span>
       </button>`;
 
   const _eventCard=`<div style="margin-bottom:20px;padding:14px 16px;background:${_themeBg};border:1.5px solid ${_theme};border-radius:14px;">
@@ -2947,13 +3113,37 @@ function rSetup(){
       </div>
       ${_rightSide}
     </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
-      <button id="btn-go-venue" style="padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">📍 会場の詳細</button>
-      <button id="btn-go-tourinfo" style="padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">📋 大会の詳細</button>
-      <button id="btn-go-schedule" style="padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">🕐 タイムスケジュール</button>
-      <button id="btn-go-regulation" style="padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">📜 レギュレーション</button>
-    </div>
+    ${eventCardBtnsHtml(_liveTour,_theme)}
+    ${_exhBtn}
   </div>`;
+
+  /* 【1-5・8-7にそろえた】開催前（次）の大会のカード。
+     土曜の大会が開催中でも、日曜の大会の会場・対戦相手を前もって見られるようにするためのもの。
+     受付ボタンと交流戦ボタンは出さない（まだ始まっていないため）。
+     新アプリでは「次の大会」がいくつでも入れられるので、1件ごとにカードを1枚出す
+     （1件だけのときは 8-7 とまったく同じ見た目）。 */
+  const _upCardOf=r=>{
+    const _upTour=(AD.tournaments||[]).find(x=>String(x.venueCode||'')===String(r.venue_code||'')&&String(x.eventCode||'')===String(r.event_code||''))
+                ||tourByCode(r.event_code);
+    if(!_upTour)return'';
+    const _upVenue=resolveVenue(_upTour);
+    const _upVenueName=_upVenue?String((_upVenue.detail&&_upVenue.detail.locationName)||_upVenue.name||'').trim():'';
+    const _upPeriod=fmtEventPeriod(_upTour);
+    /* カードの色は開催中の大会とまったく同じ決め方。
+       「場所の管理」でその場所にテーマカラーを設定していればその色、
+       設定していなければ既定のゴールド（開催中のカードと同じ）。 */
+    const _upTheme=(_upVenue&&_upVenue.themeColor)?_upVenue.themeColor:'#FFC93D';
+    const _upRaw=(_upTour.displayName&&_upTour.displayName.trim())?_upTour.displayName:_upTour.eventName;
+    const _upNameHtml=escH(_upRaw).replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
+    return`<div style="margin-bottom:20px;padding:14px 16px;background:${_upTheme}2E;border:1.5px solid ${_upTheme};border-radius:14px;">
+    <div style="font-size:11px;color:#24507d;font-weight:800;letter-spacing:0.04em;">🗓 開催前の大会</div>
+    <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.35;margin-top:3px;">${_upNameHtml}</div>
+    ${_upVenueName?`<div style="font-size:13px;color:#6b7280;margin-top:7px;line-height:1.5;">📍 ${escH(_upVenueName)}</div>`:''}
+    ${_upPeriod?`<div style="font-size:13px;color:#6b7280;margin-top:2px;line-height:1.5;">🗓 ${escH(_upPeriod)}</div>`:''}
+    ${eventCardBtnsHtml(_upTour,_upTheme)}
+  </div>`;
+  };
+  const _upcomingCard=(S._upcomingEvents||[]).map(_upCardOf).join('');
 
   /* 【1-2】同じ日に2つ以上の大会が開催中のとき、どちらを見るか選んでもらう。
        開催中が1つだけのときは、この画面は出ません（今までと全く同じ表示）。 */
@@ -3011,6 +3201,8 @@ function rSetup(){
         <span style="font-size:22px;">📤</span>
         <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">試合結果のみ<br>を送信</div>
       </button>
+      <!-- 【8-7】ここから下は 2列×3行。左上から順に並ぶ。
+           2行目＝対戦コートを検索／予選結果、3行目＝残り試合数／トーナメント表 -->
       <button id="btn-go-court-search" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
         <span style="font-size:22px;">${courtIcon}</span>
         <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">${courtLabel}</div>
@@ -3025,17 +3217,10 @@ function rSetup(){
       </button>
       <button id="btn-go-bracket" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
         <span style="font-size:22px;">🏆</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">決勝<br>トーナメント表</div>
-      </button>
-      <button id="btn-go-teamsearch" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">🪪</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">チームNo<br>を検索</div>
-      </button>
-      <button id="btn-go-spreadsheet" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📑</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">大会<br>スプレッドシート</div>
+        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">トーナメント表</div>
       </button>
     </div>
+    ${_upcomingCard}
     <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">成績・記録</div>
     <div style="display:flex;gap:8px;">
       <button id="btn-go-view-portal" style="flex:1;padding:10px 6px;background:#FFB347;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
@@ -3081,6 +3266,7 @@ function rFirst(){
 }
 
 function rOrder(){
+  const _sgl=isSinglesActive();   // シングルス大会かどうか
   const si=S.pIdx!=null?S.pIdx:S.sets.length,sn=si+1;
   const sl=S.fmt==='round2'?`${sn}セット目`:`第${sn}セット`;
   const pf=S.pFirst!=null?S.pFirst:(nfc(si)?S.fid:aF(si));
@@ -3089,11 +3275,23 @@ function rOrder(){
     ${si>0?histTbl(si):''}
     <div style="font-size:17px;font-weight:600;color:#111;margin-bottom:6px;">${sl} 投げ順の設定</div>
     ${autoSwap?`<div style="background:${LB[pf]};border:1.5px solid ${LBR[pf]};border-radius:10px;padding:10px 12px;margin-bottom:12px;font-size:13px;color:${LT[pf]};">先攻後攻は自動入れ替え：先攻 <strong>${S.teams[pf].name}</strong></div>`:''}
-    <div style="font-size:13px;color:#6b7280;margin-bottom:12px;">↑↓またはドラッグで並び替え、チェックで今セットの参加者を選択</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:12px;">${_sgl?'シングルスのため投げ順の並び替えはありません。選手を確認してください。':'↑↓またはドラッグで並び替え、チェックで今セットの参加者を選択'}</div>
     ${[0,1].map(ti=>{
       const team=S.teams[ti],ord=S.pOrders[ti].length>0?S.pOrders[ti]:team.members;
       const excl=S.pExclude[ti]||[];
-      if(!team.members.length)return`<div class="card" style="padding:12px;margin-bottom:12px;opacity:0.5;"><div style="font-size:14px;color:#9ca3af;">${team.name} — メンバー未登録</div></div>`;
+      if(!team.members.length)return`<div class="card" style="padding:12px;margin-bottom:12px;opacity:0.5;"><div style="font-size:14px;color:#9ca3af;">${team.name} — ${_sgl?'選手名未登録':'メンバー未登録'}</div></div>`;
+      // シングルス大会：並び替えも「外す」も意味が無いので、選手の確認だけを出す
+      if(_sgl){
+        return`<div class="card" style="padding:12px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <div style="width:10px;height:10px;border-radius:50%;background:${C[ti]};flex-shrink:0;"></div>
+            <span style="font-size:14px;font-weight:600;color:#111;">${team.name}</span>
+            <span style="font-size:13px;margin-left:auto;background:${pf===ti?LB[ti]:'#f3f4f6'};color:${pf===ti?LT[ti]:'#374151'};padding:2px 8px;border-radius:99px;">${pf===ti?'先攻':'後攻'}</span>
+          </div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">選手名（本名）</div>
+          <div style="font-size:16px;font-weight:600;color:#111;">${ord[0]||team.members[0]||'（未登録）'}</div>
+        </div>`;
+      }
       const activeCount=ord.filter(m=>!excl.includes(m)).length;
       const minOk=S.playerMin<=1||activeCount>=S.playerMin;
       const maxOk=S.playerMax>=99||activeCount<=S.playerMax;
@@ -3118,10 +3316,10 @@ function rOrder(){
         </div>
       </div>`;
     }).join('')}
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;margin-bottom:6px;">
+    ${_sgl?'':`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;margin-bottom:6px;">
       <button class="btn btn-yellow btn-sm" id="btn-add-member-0" style="padding:10px;font-size:13px;">＋ メンバー追加<br><span style="font-size:11px;color:#92400e;">${S.teams[0].name}</span></button>
       <button class="btn btn-yellow btn-sm" id="btn-add-member-1" style="padding:10px;font-size:13px;">＋ メンバー追加<br><span style="font-size:11px;color:#92400e;">${S.teams[1].name}</span></button>
-    </div>
+    </div>`}
     <div style="display:flex;gap:8px;margin-top:4px;">
       <button class="btn btn-gray" onclick="goBackFromOrder()" style="flex:1;">← 戻る</button>
       <button class="btn btn-green" id="btn-start" style="flex:2;padding:14px;font-size:16px;">ゲーム開始 ▶</button>
@@ -3552,22 +3750,68 @@ function rAdmin(){
 
 function escHtml(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
 // 大会1件の管理行（フォルダ移動ドロップダウン付き）
+/* 【1-5】いま「次の大会」になっている大会の一覧（会場コード_大会コード）。
+   ホームで取りに行った最新のリストがあればそれ、なければこの端末で最後に書いた控え。 */
+function upcomingKeysNow_(ad){
+  if(Array.isArray(S._upcomingRaw))return S._upcomingRaw.map(r=>String(r.event_key));
+  return ((ad&&ad.upcomingKeys)||[]).slice();
+}
+/* 【8-7】番号順に並べるための比べ方。
+   「01」「02」…「10」のような数字のコードは、数として比べる
+   （文字のまま比べると「10」が「9」より前に来てしまうため）。
+   数字でないコードは、数字のものより後ろに置いて、文字順で並べる。 */
+function byCodeAsc_(getCode){
+  return (a,b)=>{
+    const ca=String(getCode(a)||'').trim(), cb=String(getCode(b)||'').trim();
+    const na=/^\d+$/.test(ca)?parseInt(ca,10):NaN;
+    const nb=/^\d+$/.test(cb)?parseInt(cb,10):NaN;
+    const aNum=!isNaN(na), bNum=!isNaN(nb);
+    if(aNum&&bNum)return na-nb;
+    if(aNum!==bNum)return aNum?-1:1;
+    return ca.localeCompare(cb,'ja');
+  };
+}
+/* 場所の一覧を番号順に並べたものを返す。
+   編集・削除ボタンは「元の並びの何番目か」を使うので、元の位置(i)も一緒に持たせる。 */
+function venuesSorted_(ad){
+  return ((ad&&ad.venues)||[]).map((v,i)=>({v,i})).sort(byCodeAsc_(x=>x.v.code));
+}
+// 大会の一覧を、大会コードの番号順に並べたものを返す
+function toursSorted_(list){
+  return (list||[]).slice().sort(byCodeAsc_(t=>t.eventCode));
+}
+
 function adminTourRowHtml(t,ad){
   const venue=(ad.venues||[]).find(v=>v.code===t.venueCode);
   const folderOpts='<option value="">未分類</option>'+(ad.folders||[]).map(f=>`<option value="${f.id}" ${String(t.folderId||'')===String(f.id)?'selected':''}>${escHtml(f.name)}</option>`).join('');
+  /* 【8-7 修正】名前とボタンを横1列に詰め込んでいたため、ボタンに場所を取られて
+     大会名が何行にも折り返し、1件がとても縦長になっていた。
+     1段目＝大会名（横幅いっぱい）、2段目＝ボタン（入りきらなければ折り返す）に分ける。
+     ボタンの文字は white-space:nowrap で、途中で折り返さないようにする。 */
+  const _bs='padding:3px 8px;white-space:nowrap;';
+  const _tag='font-size:11px;padding:2px 6px;border-radius:99px;white-space:nowrap;';
   return`<div style="padding:10px 0;border-bottom:1px solid #f3f4f6;">
-    <div style="display:flex;align-items:center;gap:8px;">
-      <div style="flex:1;min-width:0;">
-        <div style="font-size:14px;font-weight:600;color:#111;">${t.eventName||'（大会名未設定）'}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px;">${venue?venue.name:'場所未設定'} / コード: ${t.eventCode||'未設定'}</div>
-        <div style="font-size:12px;color:#9ca3af;">チーム${(t.teams||[]).length}件 / 対戦${(t.matches||[]).length}件</div>
-      </div>
-      ${t.eventCode?`<button class="btn btn-gray btn-xs admin-refresh-tour" data-code="${t.venueCode?t.venueCode+'_'+t.eventCode:t.eventCode}" title="配信された最新の内容を取り込みます" style="padding:3px 8px;">⟳ 更新</button>`:''}
-      <button class="btn btn-gray btn-xs admin-edit-tour" data-id="${t.id}" style="padding:3px 8px;">編集</button>
-      <button class="btn btn-red-o btn-xs admin-del-tour" data-id="${t.id}" style="padding:2px 7px;font-size:11px;">削除</button>
+    <div style="min-width:0;">
+      <div style="font-size:14px;font-weight:600;color:#111;line-height:1.4;word-break:break-word;">${t.eventName||'（大会名未設定）'}</div>
+      <div style="font-size:12px;color:#6b7280;margin-top:2px;">${venue?venue.name:'場所未設定'} / コード: ${t.eventCode||'未設定'}</div>
+      <div style="font-size:12px;color:#9ca3af;">チーム${(t.teams||[]).length}件 / 対戦${(t.matches||[]).length}件</div>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:6px;margin-top:8px;">
+      ${t.eventCode?`<button class="btn btn-gray btn-xs admin-refresh-tour" data-code="${t.venueCode?t.venueCode+'_'+t.eventCode:t.eventCode}" title="配信された最新の内容を取り込みます" style="${_bs}">⟳ 更新</button>`:''}
+      <button class="btn btn-gray btn-xs admin-edit-tour" data-id="${t.id}" style="${_bs}">編集</button>
+      <button class="btn btn-red-o btn-xs admin-del-tour" data-id="${t.id}" style="padding:2px 7px;font-size:11px;white-space:nowrap;">削除</button>
       ${(ad.activeEventCode&&t.eventCode&&ad.activeEventCode===t.eventCode)?
-        '<span style="font-size:11px;background:#FEF3C7;color:#92400E;padding:2px 6px;border-radius:99px;">📡 配信中</span>':
-        `<button class="btn btn-gray btn-xs admin-set-active" data-code="${t.eventCode}" style="padding:3px 8px;">📡 配信中にする</button>`}
+        `<span style="${_tag}background:#FEF3C7;color:#92400E;">📡 配信中</span>`:
+        `<button class="btn btn-gray btn-xs admin-set-active" data-code="${t.eventCode}" style="${_bs}">📡 配信中にする</button>`}
+      ${(()=>{
+        /* 【1-5】「次の大会」は新アプリ用の Supabase のリスト（何件でも）。従来アプリの active.json には書かない。 */
+        if(!t.eventCode)return'';
+        const uk=(t.venueCode?t.venueCode+'_':'')+t.eventCode;
+        const now=upcomingKeysNow_(ad);
+        return now.indexOf(uk)>=0
+          ?`<span style="${_tag}background:#EAF2FB;color:#24507d;">🗓 次の大会</span><button class="btn btn-gray btn-xs admin-clear-upcoming" data-key="${escHtml(uk)}" style="${_bs}">解除</button>`
+          :`<button class="btn btn-gray btn-xs admin-set-upcoming" data-key="${escHtml(uk)}" data-code="${t.eventCode}" style="${_bs}">🗓 次の大会にする</button>`;
+      })()}
     </div>
     <div style="display:flex;align-items:center;gap:6px;margin-top:6px;">
       <span style="font-size:11px;color:#9ca3af;white-space:nowrap;">📁 フォルダ</span>
@@ -3609,7 +3853,9 @@ function rAdminTop(){
         <button class="btn btn-green btn-sm" id="btn-venue-import" style="white-space:nowrap;padding:8px 12px;">⬇️ 取り込む</button>
       </div>
       ${(ad.venues||[]).length===0?'<div style="font-size:13px;color:#9ca3af;">まだ登録がありません</div>':
-        (ad.venues||[]).map((v,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
+        /* 【8-7 修正】登録した順ではなく、番号順に並べる。
+           編集・削除は「元の並びの何番目か」を使うので、元の位置(x.i)をそのまま渡す。 */
+        venuesSorted_(ad).map(({v,i})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
           <span title="${v.themeColor?'テーマカラー設定あり':'テーマカラー未設定'}" style="width:14px;height:14px;border-radius:50%;flex-shrink:0;background:${v.themeColor||'#fff'};border:1px solid ${v.themeColor?'rgba(0,0,0,0.2)':'#d1d5db'};"></span>
           <div style="flex:1;font-size:14px;"><span style="font-weight:600;">${v.code}</span> : ${v.name}</div>
           <button class="btn btn-gray btn-xs admin-pub-venue" data-idx="${i}" title="この場所を配信します（他の端末が取り込めるようになります）" style="padding:3px 8px;">📡</button>
@@ -3648,7 +3894,8 @@ function rAdminTop(){
           <div style="margin-top:4px;">${recent.map(t=>adminTourRowHtml(t,ad)).join('')}</div>
         </details>`:'';
         const foldersHtml=folders.map(f=>{
-          const inF=tours.filter(t=>String(t.folderId||'')===String(f.id));
+          // 【8-7 修正】登録した順ではなく、大会コードの番号順に並べる
+          const inF=toursSorted_(tours.filter(t=>String(t.folderId||'')===String(f.id)));
           return`<details data-fold="${f.id}" ${_adminFolderOpen[f.id]?'open':''} style="margin-bottom:8px;border:1px solid #eee;border-radius:8px;padding:6px 10px;">
             <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#111;">📁 ${escHtml(f.name)} <span style="font-size:11px;color:#9ca3af;font-weight:400;">(${inF.length})</span></summary>
             <div style="display:flex;gap:6px;margin:6px 0 4px;">
@@ -3658,7 +3905,8 @@ function rAdminTop(){
             ${inF.length?inF.map(t=>adminTourRowHtml(t,ad)).join(''):'<div style="font-size:12px;color:#9ca3af;padding:4px 0;">この中に大会はありません</div>'}
           </details>`;
         }).join('');
-        const un=tours.filter(t=>!t.folderId);
+        // 【8-7 修正】未分類も大会コードの番号順（「最近使った大会」は新しい順のまま）
+        const un=toursSorted_(tours.filter(t=>!t.folderId));
         const unHtml=`<details data-fold="__uncat__" ${_adminFolderOpen['__uncat__']!==false?'open':''} style="margin-bottom:4px;">
           <summary style="cursor:pointer;font-size:13px;font-weight:700;color:#111;">📄 未分類 <span style="font-size:11px;color:#9ca3af;font-weight:400;">(${un.length})</span></summary>
           <div style="margin-top:4px;">${un.length?un.map(t=>adminTourRowHtml(t,ad)).join(''):'<div style="font-size:12px;color:#9ca3af;padding:4px 0;">未分類の大会はありません</div>'}</div>
@@ -3808,8 +4056,9 @@ function ruleCardsHtml(obj){
     <div style="display:flex;align-items:center;margin-bottom:8px;">
       <div style="flex:1;font-size:14px;font-weight:600;color:#111;">🗺 試合システム図</div>
       <button class="btn btn-blue btn-xs" id="btn-sc-autogen" style="padding:4px 10px;">ルールから自動生成</button>
+      <button class="btn btn-gray btn-xs" id="btn-sc-tpl" style="padding:4px 10px;margin-left:6px;">テンプレを読み込む</button>
     </div>
-    <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">「残り試合数を確認」で表示される図です。一度負けると右の列（トーナメント）へ移ります。<br>「ルールから自動生成」を押すと、いまの<strong>試合区分・トーナメント種類・ラウンド名・優先ルール</strong>（ラウンドごとの上書きを含む）にそろえて作り直します。${scHasRules?'':'<br>※ 先に試合区分・トーナメント種類・ラウンド名を登録すると自動生成できます。'}</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">「残り試合数を確認」で表示される図です。一度負けると右の列（トーナメント）へ移ります。<br>「ルールから自動生成」を押すと、いまの<strong>試合区分・トーナメント種類・ラウンド名・優先ルール</strong>（ラウンドごとの上書きを含む）にそろえて作り直します。<br>「テンプレを読み込む」を押すと、<strong>よく使う大会の形</strong>（66〜96チーム型・128チーム型など）をそのまま呼び出せます。いまの図に名前を付けて保存し、次の大会で呼び出すこともできます。<br>プレビューの<strong>箱（試合）をタップ</strong>すると、<strong>負けたチームの行き先</strong>を選べます。左右どちらの列でも、2つ下の回戦でも指定できます。<br>プレビューの<strong>矢印をタップ</strong>すると、<strong>その矢印を消せます</strong>（消したあとも、箱をタップして行き先を選び直せば戻せます）。${scHasRules?'':'<br>※ 先に試合区分・トーナメント種類・ラウンド名を登録すると自動生成できます。'}</div>
 
     <details style="margin-bottom:10px;"${scText.trim()?'':' open'}>
       <summary style="cursor:pointer;font-size:13px;color:#2E8B57;padding:6px 0;">① 構成を編集する（トーナメント名・回戦）</summary>
@@ -3833,7 +4082,7 @@ function ruleCardsHtml(obj){
       </div>
     </details>
 
-    <div style="font-size:12px;color:#6b7280;margin:6px 0 4px;">プレビュー　<span style="color:#9ca3af;">（青い ↘ をタップすると「負け矢印」の表示／非表示を切り替えできます）</span></div>
+    <div style="font-size:12px;color:#6b7280;margin:6px 0 4px;">プレビュー　<span style="color:#9ca3af;">（<b>矢印をタップすると、その矢印を消せます</b>／箱をタップすると行き先を選べます）</span></div>
     <div id="sc-preview" style="overflow-x:auto;padding:8px;background:#fafafa;border-radius:8px;">${renderSystemChart(scCh,true)}</div>
   </div>`;
 
@@ -3841,6 +4090,39 @@ function ruleCardsHtml(obj){
     +foldSection('トーナメント種類ルール',tourneyRules.length,'btn-add-tourney-rule',ruleRowsHtml(tourneyRules,'tourney',{}),'',false,'ruleTourney')
     +foldSection('ラウンド名設定',roundRules.length,'btn-add-round-rule',roundInner,roundSub,false,'ruleRound')
     +scSection+`</div>`;
+}
+
+/* 管理者画面：交流戦の参加申請の設定
+     (a) 申請フォームを作るかどうか
+     (b) 交流戦の試合数
+     (c) それぞれの名前
+     (d) それぞれの詳細説明（参加者の選択画面に出る） */
+function exhEditorHtml(tour){
+  const ex=exhOf(tour);
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];
+  const games=ex.games.map((g,i)=>`
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:6px;">交流戦${NUM[i]}</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
+      <input type="text" class="te-exh-name" data-i="${i}" value="${esc(g.name)}" placeholder="交流戦${NUM[i]}" style="font-size:14px;"/>
+      <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">詳細説明・メモ（開催時間など。参加者の選択画面に出ます）</div>
+      <textarea class="te-exh-desc" data-i="${i}" rows="2" placeholder="例: 12:30〜13:05／2セット先取" style="width:100%;">${esc(g.desc)}</textarea>
+    </div>`).join('');
+  return `<div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
+    <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">交流戦の参加申請</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">交流戦を「出たいチームだけが申し込む」形にするための設定です。<br><b>「作る」にしても、それだけではアプリにボタンは出ません。</b>対戦表の「モルック管理」→<b>「交流戦の受付を開始する」</b>を押したときに出て、「受付を終了する」で消えます。<br>申し込みは対戦表の「【運営用】交流戦参加確認」シートに書き込まれます。</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">参加申請フォーム</div>
+    <select id="te-exh-enabled" style="font-size:14px;margin-bottom:10px;">
+      <option value="0" ${ex.enabled?'':'selected'}>作らない</option>
+      <option value="1" ${ex.enabled?'selected':''}>作る</option>
+    </select>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">交流戦の試合数</div>
+    <select id="te-exh-count" style="font-size:14px;margin-bottom:10px;">
+      ${[0,1,2,3,4,5].map(n=>`<option value="${n}" ${ex.count===n?'selected':''}>${n===0?'なし':(n+'試合')}</option>`).join('')}
+    </select>
+    ${games}
+  </div>`;
 }
 
 // 優先ルールの1行トグル
@@ -3870,7 +4152,8 @@ function rAdminTourEdit(){
     </div>`).join('');
   }
 
-  const venueOpts=(ad.venues||[]).map(v=>`<option value="${v.code}" ${tour.venueCode===v.code?'selected':''}>${v.code}: ${v.name}</option>`).join('');
+  // 【8-7】ここも番号順にそろえる
+  const venueOpts=venuesSorted_(ad).map(({v})=>`<option value="${v.code}" ${tour.venueCode===v.code?'selected':''}>${v.code}: ${v.name}</option>`).join('');
 
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
@@ -3918,12 +4201,37 @@ function rAdminTourEdit(){
           <input type="text" id="te-reception-pw" value="${tour.receptionPw||''}" placeholder="例: 1234" maxlength="4" inputmode="numeric" style="font-size:18px;letter-spacing:4px;text-align:center;"/>
         </div>
         <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
-          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏆 決勝トーナメントのチーム数</div>
-          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">決勝トーナメント表の形（ラウンド数・シードの有無）が自動で切り替わります。24・48チームでは上位チームが1回戦免除（シード）になります。</div>
-          <select id="te-bracket-count" style="font-size:14px;">
-            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">👥 試合形式（チーム戦／シングルス）</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>シングルス</b>を選ぶと、1人で出る大会向けの表示に切り替わります。<br>・チーム名の欄に<b>モルックネーム</b>、メンバー①の欄に<b>本名のフルネーム</b>を登録してください<br>・「成績を見る」では、中身が同じになるチームの成績を出さず、個人の成績だけを表示します<br>・投げ順の設定画面は「選手の確認」だけになります（並び替え・外すは出ません）<br>・1セットの人数は自動で1人ちょうどになります<br>何も選ばなかった大会（過去の大会を含む）は<b>チーム戦</b>として扱われます。</div>
+          <select id="te-match-type" style="font-size:14px;">
+            <option value="team" ${isSinglesTour(tour)?'':'selected'}>チーム戦（2人以上のチームで出る）</option>
+            <option value="singles" ${isSinglesTour(tour)?'selected':''}>シングルス（1人で出る）</option>
           </select>
         </div>
+        <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏆 トーナメント表の設定</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">トーナメントは2つまで設定できます。<b>トーナメント①</b>はスプレッドシートの「決勝T送信」シートから、<b>トーナメント②</b>は「Bトーナメント送信」シートから配信されたものが表示されます。<br>トーナメントが1つだけの大会は、②を「なし」にしてください。参加者のアプリでは「トーナメント表」を押したときに、どちらを見るか選ぶ画面が出ます（②が「なし」のときは今までどおり、そのまま表が開きます）。<br>チーム数を選ぶと、表の形（ラウンド数・シードの有無）が自動で切り替わります。24・48チームでは上位チームが1回戦免除（シード）になります。</div>
+          <div style="background:#f9fafb;border-radius:8px;padding:10px;margin-bottom:8px;">
+            <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント①（決勝トーナメント）</div>
+            <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
+            <input type="text" id="te-bracket1-name" value="${(tour.bracket1Name||'決勝トーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="決勝トーナメント" style="font-size:14px;"/>
+            <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
+            <select id="te-bracket-count" style="font-size:14px;">
+              ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
+            </select>
+          </div>
+          <div style="background:#f9fafb;border-radius:8px;padding:10px;">
+            <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント②（Bトーナメント）</div>
+            <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
+            <input type="text" id="te-bracket2-name" value="${(tour.bracket2Name||'Bトーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="Bトーナメント" style="font-size:14px;"/>
+            <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
+            <select id="te-bracket2-count" style="font-size:14px;">
+              <option value="0" ${Number(tour.bracket2TeamCount||0)>0?'':'selected'}>なし（トーナメントは1つだけ）</option>
+              ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracket2TeamCount||0)===n?'selected':''}>${n}チーム</option>`).join('')}
+            </select>
+          </div>
+        </div>
+        ${exhEditorHtml(tour)}
       </div>
       <div style="font-size:11px;color:#9ca3af;margin-top:10px;">入力内容は自動で保存されます。「保存して戻る」を押すと全端末に配信されます。</div>
     </div>
@@ -3945,11 +4253,11 @@ function rAdminTourEdit(){
 
     <div class="card" style="padding:14px;margin-bottom:12px;">
       <div style="display:flex;align-items:center;margin-bottom:6px;">
-        <div style="flex:1;font-size:14px;font-weight:600;color:#111;">参加チーム・メンバー</div>
+        <div style="flex:1;font-size:14px;font-weight:600;color:#111;">${isSinglesTour(tour)?'参加選手':'参加チーム・メンバー'}</div>
         <button class="btn btn-blue btn-xs" id="btn-csv-teams" style="padding:4px 10px;margin-right:6px;">📂 CSV</button>
         <button class="btn btn-green btn-xs" id="btn-add-team" style="padding:4px 10px;">＋ 追加</button>
       </div>
-      <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">CSV: A列=チームNo、B列=チーム名、C〜G列=メンバー　登録済み: ${(tour.teams||[]).length}件</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">${isSinglesTour(tour)?'CSV: A列=選手No、B列=モルックネーム、C列=本名フルネーム（漢字あり・スペースなし）　※シングルスなのでC列に1人だけ書きます':'CSV: A列=チームNo、B列=チーム名、C〜G列=メンバー'}　登録済み: ${(tour.teams||[]).length}件</div>
       ${(tour.teams||[]).length>0?`<details style="margin-bottom:8px;"><summary style="cursor:pointer;font-size:13px;color:#2E8B57;padding:6px 0;">詳細を表示（${(tour.teams||[]).length}件）</summary>
         <div style="margin-top:6px;">
         ${(tour.teams||[]).map((t,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
@@ -4070,7 +4378,12 @@ function showRuleModal(prefix,idx){
 // ===== 成績閲覧 =====
 function rViewPortal(){
   const vs=_viewState;
-  const tabs=[{id:'event',label:'🏆 大会'},{id:'team',label:'👤👤👤 チーム'},{id:'person',label:'👤 個人'}];
+  // シングルス大会は「チームの成績」と「個人の成績」が同じ中身になるため、チームのボタンを出さない
+  const _sglView=isSinglesEventCode(vs.eventCode);
+  if(_sglView&&vs.tab==='team')vs.tab='person';
+  const tabs=[{id:'event',label:'🏆 大会'}]
+    .concat(_sglView?[]:[{id:'team',label:'👤👤👤 チーム'}])
+    .concat([{id:'person',label:_sglView?'👤 選手':'👤 個人'}]);
   const tabHtml=tabs.map(t=>`<button class="btn ${vs.tab===t.id?'btn-gold':'btn-gray'} btn-sm" data-vtab="${t.id}" style="flex:1;padding:8px;font-size:13px;">${t.label}</button>`).join('');
 
   // 大会選択肢（大会名表示）
@@ -4149,7 +4462,7 @@ function rViewPortal(){
 
   // 検索ボックス（チーム・個人タブのみ）
   const searchHtml=vs.tab==='team'?`<input type="text" id="view-search" value="${vs.searchTeam||''}" placeholder="チーム名・チームNoで検索..." style="font-size:14px;margin-bottom:10px;"/>`:
-    vs.tab==='person'?`<input type="text" id="view-search" value="${vs.searchPerson||''}" placeholder="個人名・チーム名で検索..." style="font-size:14px;margin-bottom:10px;"/>`:'';
+    vs.tab==='person'?`<input type="text" id="view-search" value="${vs.searchPerson||''}" placeholder="${_sglView?'選手名で検索...':'個人名・チーム名で検索...'}" style="font-size:14px;margin-bottom:10px;"/>`:'';
 
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
@@ -4773,21 +5086,26 @@ function ssTeamBlockHtml(ss,compact){
   const mode=ss.mode||'select';
   const tab=(v,l)=>`<button class="ss-mode-tab" data-mode="${v}" style="flex:1;padding:${compact?'8px':'9px'} 4px;font-size:${compact?12:13}px;font-weight:700;border:none;border-radius:8px;background:${mode===v?'#F2B705':'#f3f4f6'};color:${mode===v?'#3a2c00':'#6b7280'};cursor:pointer;">${l}</button>`;
   const lt=findTourByScoreEvent(ss.eventCode);
+  /* ここは「大会を選ぶ」画面なので、開催中の大会ではなく
+     選ばれた大会がシングルスかどうかで呼び方を決める。
+     その大会をまだ読み込んでいない端末では lt が見つからず、
+     これまでどおり「チーム」と表示される（＝チーム戦扱い）。 */
+  const sW=wTeam(lt||null);
   const teams=((lt&&lt.teams)||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
   let inner;
   if(mode==='select'){
     inner=teams.length>0
-      ?`<div style="font-size:${compact?12:13}px;color:#6b7280;margin-bottom:4px;font-weight:600;">チーム名を選択</div>
+      ?`<div style="font-size:${compact?12:13}px;color:#6b7280;margin-bottom:4px;font-weight:600;">${sW}名を選択</div>
         <select id="ss-team-select" style="font-size:${compact?13:15}px;margin-bottom:${compact?10:12}px;">
-          <option value="">-- チームを選択 --</option>
+          <option value="">-- ${sW}を選択 --</option>
           ${teams.map(t=>`<option value="${t.id}" ${String(ss.teamNo||'')===String(t.id)?'selected':''}>No.${t.id}　${t.name}</option>`).join('')}
         </select>`
-      :`<div style="font-size:12px;color:#92400e;background:#FFF7ED;border:1px solid #fed7aa;border-radius:8px;padding:8px 10px;margin-bottom:${compact?10:12}px;">この大会のチーム一覧データがないため、「チームNoで入力」をご利用ください</div>`;
+      :`<div style="font-size:12px;color:#92400e;background:#FFF7ED;border:1px solid #fed7aa;border-radius:8px;padding:8px 10px;margin-bottom:${compact?10:12}px;">この大会の${sW}一覧データがないため、「${sW}Noで入力」をご利用ください</div>`;
   }else{
-    inner=`<div style="font-size:${compact?12:13}px;color:#6b7280;margin-bottom:4px;font-weight:600;">チームNo</div>
+    inner=`<div style="font-size:${compact?12:13}px;color:#6b7280;margin-bottom:4px;font-weight:600;">${sW}No</div>
       <input type="text" id="ss-team-no" value="${ss.teamNo||''}" placeholder="例: 073" style="font-size:14px;margin-bottom:${compact?10:12}px;"/>`;
   }
-  return`<div style="display:flex;gap:8px;margin-bottom:10px;">${tab('select','チーム名から選ぶ')}${tab('no','チームNoで入力')}</div>${inner}`;
+  return`<div style="display:flex;gap:8px;margin-bottom:10px;">${tab('select',sW+'名から選ぶ')}${tab('no',sW+'Noで入力')}</div>${inner}`;
 }
 
 function rScoreMatchList(){
@@ -5236,6 +5554,54 @@ async function fetchActiveEvent(){
   return out;
 }
 
+/* 【1-5・8-7にそろえた】開催前（次）の大会のリストを取りに行く。
+   開催中リスト（live_events）とは別の表（upcoming_events）。いくつでも入る。
+   ※古い版（1-4 まで）のアプリは live_events しか読まないので、
+     ここに入れた大会が古い版で「開催中」に見えてしまうことはない。
+   通信に失敗したら null（＝前回のカードをそのまま残す）。 */
+let _upMemo=null,_upMemoTs=0;
+function clearUpcomingMemo(){_upMemo=null;_upMemoTs=0;}
+async function fetchUpcomingEvents(){
+  if(_upMemo&&(Date.now()-_upMemoTs)<30000)return _upMemo;
+  const doFetch=async()=>{
+    const url=SB_URL+'/rest/v1/upcoming_events?select=event_key,venue_code,event_code,label,sort_order&order=sort_order';
+    const res=await fetch(url,{cache:'no-store',headers:sbHeaders()});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    return (await res.json())||[];
+  };
+  let out=null;
+  try{ out=await doFetch(); }
+  catch(e1){
+    await new Promise(r=>setTimeout(r,500));
+    try{ out=await doFetch(); }
+    catch(e2){ console.warn('開催前リストの取得に失敗:',e2); return null; }
+  }
+  _upMemo=out;_upMemoTs=Date.now();
+  return out;
+}
+
+/* 【1-5】開催前（次）の大会リストを Supabase に書き込む（配信キーが必要）。
+   keys は「会場コード_大会コード」の並び。空なら全部解除。 */
+async function publishUpcomingEvents(keys){
+  const key=String(AD.sbSyncKey||'').trim();
+  if(!key)return {ok:false,reason:'nokey'};
+  const rows=(keys||[]).map((k,i)=>{
+    const p=String(k).split('_');
+    const t=(AD.tournaments||[]).find(x=>((x.venueCode?x.venueCode+'_':'')+x.eventCode)===k);
+    return{event_key:k,venue_code:p[0]||'',event_code:p.slice(1).join('_')||'',
+           label:(t&&(t.displayName||t.eventName))||'',sort_order:i};
+  });
+  try{
+    const res=await fetch(SB_URL+'/rest/v1/rpc/set_upcoming_events',{
+      method:'POST',
+      headers:{'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON,'Content-Type':'application/json'},
+      body:JSON.stringify({p_key:key,p_rows:rows})});
+    if(res.ok){clearUpcomingMemo();return {ok:true};}
+    const t=await res.text();
+    return {ok:false,reason:(t.indexOf('合言葉')>=0?'badkey':'http'),status:res.status};
+  }catch(e){ return {ok:false,reason:'net'}; }
+}
+
 // 修正②：hasOwnProperty で空文字("")を正しく判定し、falsyバグを解消
 // リモート取得成功時は必ずその値（空文字含む）を使用する
 // リモート取得失敗（ネットワークエラー等）時のみ localStorage のコードにフォールバック
@@ -5270,6 +5636,7 @@ async function publishSettings(tour,opts){
     gasUrl: tour.gasUrl||'',
     sheetUrl: tour.sheetUrl||'',
     priority: tour.priority||'tournament',
+    matchType: tour.matchType||'team',   // 試合形式（チーム戦／シングルス）も届ける
     matchRules: tour.matchRules||[],
     tourneyRules: tour.tourneyRules||[],
     roundRules: tour.roundRules||[],
@@ -5278,6 +5645,10 @@ async function publishSettings(tour,opts){
     eventPeriodEnd: tour.eventPeriodEnd||'',
     receptionPw: tour.receptionPw||'',
     bracketTeamCount: Number(tour.bracketTeamCount)||64,
+    bracket1Name: tour.bracket1Name||'決勝トーナメント',
+    bracket2TeamCount: Number(tour.bracket2TeamCount)||0,
+    bracket2Name: tour.bracket2Name||'Bトーナメント',
+    exhibition: exhOf(tour),   // 交流戦の参加申請の設定（他の端末へ届ける）
     systemChart: tour.systemChart||null,
     venue: resolveVenue(tour), // 会場（場所）情報＋詳細を同梱して参加者へ配信
     tourInfo: tour.tourInfo||{rules:'',notes:''}, // 大会の詳細（規約・注意点）を同梱して参加者へ配信
@@ -5671,10 +6042,12 @@ const SC_PALETTE=[
   {key:'orange',label:'オレンジ',      bg:'#FCE3CF',bd:'#EFB483',tx:'#7a3e12'},
   {key:'teal',  label:'ティール',      bg:'#D2EDEA',bd:'#8FCFC7',tx:'#134e48'},
   {key:'red',   label:'レッド',        bg:'#F6D4D2',bd:'#E59C97',tx:'#7a1f1a'},
-  {key:'indigo',label:'インディゴ',    bg:'#D9DCEC',bd:'#A3A9D1',tx:'#2a2e63'}
+  {key:'indigo',label:'インディゴ',    bg:'#D9DCEC',bd:'#A3A9D1',tx:'#2a2e63'},
+  {key:'white', label:'ホワイト（交流戦）',bg:'#FFFFFF',bd:'#555555',tx:'#222222'}   // 【追加】交流戦などの白い箱
 ];
 const SC_COLORS={};SC_PALETTE.forEach(p=>{SC_COLORS[p.key]={bg:p.bg,bd:p.bd,tx:p.tx};});
 function scEsc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+function escSc_(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
 function scCircled(n){const m=['','①','②','③','④','⑤','⑥','⑦','⑧','⑨','⑩'];return m[n]||('('+n+')');}
 function scColorOf(v){
   v=String(v||'').trim().toLowerCase();
@@ -5774,7 +6147,7 @@ function buildSystemChartFromRules(obj){
   usedFmts.forEach(f=>{if(!order.includes(f))legend.push({label:fmtLabel(f),color:fmtToColor(f)});});
   return{enabled:true,cornerLabel:'',prelims,rowLabels,
     legend:legend.length?legend:[{label:'2先',color:'green'}],
-    columns,colors,cellColors,loseArrows:{}};
+    columns,colors,cellColors,loseArrows:{},loseTo:{}};
 }
 
 // 図オブジェクト → 構成テキスト（※色・矢印は含めない＝別管理）
@@ -5782,7 +6155,9 @@ function systemChartToText(ch){
   if(!ch)return'';
   const L=[];
   if(ch.cornerLabel)L.push('タイトル: '+ch.cornerLabel);
-  if(ch.prelims&&ch.prelims.length)L.push('予選: '+ch.prelims.join(' | '));
+  if(ch.prelims&&ch.prelims.length)L.push('予選: '+ch.prelims.map(p=>{
+    const n=scPrelimName(p),sp=scPrelimSpan(p);return sp?(n+'*'+sp):n;
+  }).join(' | '));
   if(ch.rowLabels&&ch.rowLabels.length)L.push('行: '+ch.rowLabels.join(' | '));
   if(ch.legend&&ch.legend.length)L.push('凡例: '+ch.legend.map(x=>x.label+'='+x.color).join(' | '));
   L.push('');
@@ -5795,14 +6170,21 @@ function systemChartToText(ch){
 // 構成テキスト → 図オブジェクト（色・矢印は含まない）
 // 列の書式: 新「名前 | 開始行 | 注記 | 回戦...」/ 旧「名前 | 色 | 開始行 | 注記 | 回戦...」両対応
 function systemChartFromText(txt){
-  const ch={enabled:true,cornerLabel:'',prelims:[],rowLabels:[],legend:[],columns:[],colors:{},loseArrows:{}};
+  const ch={enabled:true,cornerLabel:'',prelims:[],rowLabels:[],legend:[],columns:[],colors:{},loseArrows:{},loseTo:{}};
   (txt||'').split('\n').forEach(raw=>{
     const line=raw.trim();
     if(!line||line[0]==='#')return;
     const km=line.match(/^([^|:：]+)[:：]\s*(.*)$/);
     const key=km?km[1].trim().toLowerCase():'';
     if(km&&/^(タイトル|title)$/.test(key)){ch.cornerLabel=km[2].trim();return;}
-    if(km&&/^(予選|prelim|prelims)$/.test(key)){ch.prelims=km[2].split(/[|,，]/).map(x=>x.trim()).filter(Boolean);return;}
+    if(km&&/^(予選|prelim|prelims)$/.test(key)){
+      // 「二次予選*1」と書くと、左から1列ぶんの幅の短いバーになる
+      ch.prelims=km[2].split(/[|,，]/).map(x=>x.trim()).filter(Boolean).map(x=>{
+        const m2=x.match(/^(.*?)\s*\*\s*(\d+)$/);
+        return m2?{name:m2[1].trim(),span:parseInt(m2[2],10)}:x;
+      });
+      return;
+    }
     if(km&&/^(行|行ラベル|rows|row)$/.test(key)){ch.rowLabels=km[2].split(/[|,，]/).map(x=>x.trim()).filter(Boolean);return;}
     if(km&&/^(凡例|legend)$/.test(key)){
       ch.legend=km[2].split('|').map(x=>x.trim()).filter(Boolean).map(p=>{const mm=p.split('=');return{label:(mm[0]||'').trim(),color:scColorOf(mm[1])};});
@@ -5850,6 +6232,39 @@ function scApplyStructureText(obj,text){
   const arrows={};
   Object.keys(oldArrows).forEach(k=>{const nm=k.split('@')[0];if(parsed.columns.some(c=>c.name===nm))arrows[k]=oldArrows[k];});
   parsed.loseArrows=arrows;
+  // 【8-6】「負けたチームの行き先」も、出発の列と行き先の列が両方とも残っているものだけ引き継ぐ
+  const oldTo=(obj&&obj.loseTo)?obj.loseTo:{};
+  const to={};
+  Object.keys(oldTo).forEach(k=>{
+    const nm=k.split('@')[0];
+    // 行き先は「交流戦」だけでなく「交流戦@2」（2つ下の回戦）と書けるので、
+    // ＠より前だけを取り出して列名と見くらべる。
+    // ※ここで＠を外し忘れていたため、「決勝トーナメント→交流戦②」の指定が
+    //   保存のたびに消えてしまっていた（8-6 の不具合）。
+    const dest=scSplitRef(oldTo[k]).name;
+    if(parsed.columns.some(c=>c.name===nm)&&parsed.columns.some(c=>c.name===dest))to[k]=oldTo[k];
+  });
+  parsed.loseTo=to;
+  // 【8-6】テンプレが持っている追加の矢印（予選から次点32チームへ、など）も引き継ぐ
+  const oldLinks=(obj&&Array.isArray(obj.links))?obj.links:[];
+  const nameOK=v=>{const p=scSplitRef(v);return /^(予選|prelim|prelims)$/i.test(p.name)||parsed.columns.some(c=>c.name===p.name);};
+  void scPrelimName;
+  parsed.links=oldLinks.filter(l=>l&&nameOK(l.from)&&nameOK(l.to));
+  if(obj&&obj.autoLose!==undefined)parsed.autoLose=obj.autoLose;
+  // 予選バーの色は構成テキストに書けないので、同じ名前のものから引き継ぐ
+  const oldPre=(obj&&Array.isArray(obj.prelims))?obj.prelims:[];
+  parsed.prelims=(parsed.prelims||[]).map(p=>{
+    const nm=scPrelimName(p);
+    const src=oldPre.find(o=>scPrelimName(o)===nm);
+    const col=(src&&typeof src==='object')?src.color:null;
+    // 置き場所（offset）も構成テキストには書けないので、色と同じように名前で引き継ぐ
+    const off=(src&&typeof src==='object')?src.offset:null;
+    if(!col&&!off)return p;
+    const base=(typeof p==='object')?Object.assign({},p):{name:nm};
+    if(col)base.color=col;
+    if(off)base.offset=off;
+    return base;
+  });
   // セル個別色も同様に、現存する列のものだけ引き継ぐ
   const oldCellColors=(obj&&obj.cellColors)?obj.cellColors:{};
   const cellColors={};
@@ -5858,9 +6273,103 @@ function scApplyStructureText(obj,text){
   return parsed;
 }
 
+/* =========================================================================
+   図オブジェクト → 表示HTML
+
+   【8-6 手直し】矢印の描き方を作り直した。
+     ・箱（試合）と予選のバーは、これまでどおり表（テーブル）で並べる。
+     ・矢印は、表の上に重ねた透明な絵（SVG）にあとから描く（scPaint）。
+       こうすると「箱から箱へ」きちんとつながる線が引けるので、
+         ・となりの列だけでなく、離れた列へ
+         ・右だけでなく、左へ
+         ・1つ下の行だけでなく、2つ下の行へ
+       も自由に矢印を出せる。
+     ・editable=true（管理者のプレビュー）では、箱をタップすると
+       「負けたチームの行き先」を選べる。
+   ========================================================================= */
+const SC_REG={};        // 描いた図を id で覚えておく（あとで矢印を描くときに使う）
+let SC_REG_SEQ=0;
+
+/* 行き先の書き方を読み解く
+     '交流戦'    → 名前だけ（行は「1つ下」）
+     '交流戦@3'  → 上から4番目の行（0から数えて3）の交流戦 */
+function scSplitRef(v){
+  const s=String(v==null?'':v);
+  const i=s.lastIndexOf('@');
+  if(i<0)return{name:s,row:null};
+  const n=parseInt(s.slice(i+1),10);
+  if(isNaN(n))return{name:s.slice(0,i),row:null};
+  return{name:s.slice(0,i),row:n};
+}
+/* '予選@2' や 'Bトーナメント@1' を、図の中の場所に変換する */
+function scRefToPos(v,cols){
+  const p=scSplitRef(v);
+  if(p.row==null)return null;
+  if(/^(予選|prelim|prelims)$/i.test(p.name))return{k:'prelim',i:p.row};
+  const c=cols.findIndex(x=>x.name===p.name);
+  if(c<0)return null;
+  return{k:'cell',c:c,r:p.row};
+}
+/* 予選のバーは「文字だけ」でも「{name, span} の形」でも書ける。
+   span＝左から何列ぶんの幅にするか（省略すると全部の列にまたがる横長のバー）。
+   例：二次予選は上位64チームだけが戦うので span:1（決勝トーナメントの列だけ）にする。
+   こうすると右側があくので、一次予選からBトーナメントへ矢印を通せる。 */
+function scPrelimName(p){return (p&&typeof p==='object')?String(p.name||''):String(p==null?'':p);}
+function scPrelimSpan(p){const n=(p&&typeof p==='object')?parseInt(p.span,10):NaN;return (n>=1)?n:0;}
+function scPrelimColor(p){const k=(p&&typeof p==='object')?p.color:null;return SC_COLORS[scColorOf(k||'gray')]||SC_COLORS.gray;}
+/* 予選バーを「左から何列ぶん空けて」置くか。0（未指定）＝いちばん左。
+   例）3列の図で offset:1 なら、真ん中の列の上に置かれる。 */
+function scPrelimOffset(p){const n=(p&&typeof p==='object')?parseInt(p.offset,10):NaN;return (n>=1)?n:0;}
+
+/* 図の中で「何試合目まであるか」 */
+function scMaxRows(cols){
+  let m=0;(cols||[]).forEach(col=>{m=Math.max(m,(col.startRow||0)+col.cells.length);});
+  return m;
+}
+/* 図に描く矢印を全部集める
+     ① これまでの「負け」矢印（自動＋ch.loseArrows／ch.loseTo による指定）
+     ② テンプレなどが持っている追加の矢印（ch.links）
+   返す形： {from,to,kind:'lose'|'plain',label} */
+function scCollectLinks(ch,cols){
+  const cellOf=(ci,ri)=>{const col=cols[ci];if(!col)return null;const i=ri-(col.startRow||0);return(i>=0&&i<col.cells.length)?col.cells[i]:null;};
+  const has=(ci,ri)=>{const v=cellOf(ci,ri);return v!=null&&v!=='';};
+  const out=[];
+  const maxRows=scMaxRows(cols);
+  for(let c=0;c<cols.length;c++){
+    for(let r=0;r<maxRows;r++){
+      if(!has(c,r))continue;
+      const key=cols[c].name+'@'+r;
+      let d=c+1,s=r+1;
+      const raw=ch.loseTo&&ch.loseTo[key];
+      if(raw){
+        const p=scSplitRef(raw);
+        const i=cols.findIndex(x=>x.name===p.name);
+        if(i>=0&&i!==c){d=i;s=(p.row==null)?r+1:p.row;}
+      }
+      const auto=(ch.autoLose!==false)&&d>=0&&d<cols.length&&has(d,s);
+      const ov=ch.loseArrows?ch.loseArrows[key]:undefined;
+      const on=(ov===true)?true:((ov===false)?false:auto);
+      if(!on)continue;
+      if(d<0||d>=cols.length||d===c||!has(d,s))continue;
+      out.push({from:{k:'cell',c:c,r:r},to:{k:'cell',c:d,r:s},kind:'lose',label:'負け',src:'lose',key:key});
+    }
+  }
+  (ch.links||[]).forEach((l,li)=>{
+    if(!l)return;
+    const a=scRefToPos(l.from,cols),b=scRefToPos(l.to,cols);
+    if(!a||!b)return;
+    const nPre=((ch.prelims||[]).length);
+    if(b.k==='cell'&&!has(b.c,b.r))return;
+    if(a.k==='cell'&&!has(a.c,a.r))return;
+    if(a.k==='prelim'&&(a.i<0||a.i>=nPre))return;
+    if(b.k==='prelim'&&(b.i<0||b.i>=nPre))return;
+    out.push({from:a,to:b,kind:(l.kind==='lose'?'lose':'plain'),ci:(l.ci==null?null:Number(l.ci)),label:(l.label==null?'':String(l.label)),src:'link',li:li});
+  });
+  return out;
+}
+
 function scIsConfigured(ch){return!!(ch&&((ch.columns&&ch.columns.length)||(ch.prelims&&ch.prelims.length)||ch.cornerLabel));}
 
-// 図オブジェクト → 表示HTML。editable=true で矢印クリック編集用の属性を付与。
 function renderSystemChart(ch,editable){
   if(!ch||!ch.columns||!ch.columns.length){
     return'<div style="font-size:13px;color:#9ca3af;padding:24px 12px;text-align:center;">試合システム図はまだ設定されていません。<br>管理者画面の「大会設定」または「ルールテンプレート」で登録してください。</div>';
@@ -5868,15 +6377,15 @@ function renderSystemChart(ch,editable){
   const cols=scRepairCols(ch.columns),nCols=cols.length;
   const cellOf=(c,r)=>{const col=cols[c];const i=r-(col.startRow||0);return(i>=0&&i<col.cells.length)?col.cells[i]:null;};
   const hasCell=(c,r)=>{const v=cellOf(c,r);return v!=null&&v!=='';};
-  const loseKey=(c,r)=>cols[c].name+'@'+r;
-  const loseAuto=(c,r)=>hasCell(c,r)&&(c+1<nCols)&&hasCell(c+1,r+1);
-  const loseActive=(c,r)=>{const ov=ch.loseArrows&&ch.loseArrows[loseKey(c,r)];if(ov===true)return true;if(ov===false)return false;return loseAuto(c,r);};
-  let maxRows=0;cols.forEach(col=>{maxRows=Math.max(maxRows,(col.startRow||0)+col.cells.length);});
+  const maxRows=scMaxRows(cols);
   const rowLabels=ch.rowLabels||[];
   const totalGrid=nCols*2-1;
+  const regId='sc'+(++SC_REG_SEQ);
+  SC_REG[regId]={ch:ch,cols:cols,editable:!!editable};
+
   // 横スクロール不要で全体が収まるよう、幅を100%に固定し列幅を％配分する
-  const labelPct=nCols>=5?9:11;
-  const gapPct=nCols>=5?2.5:3;
+  const labelPct=nCols>=5?11:(nCols>=4?12:14);   // 「第10試合」が折り返さない幅
+  const gapPct=nCols>=5?3:5.5;   // 矢印が縦に通れるだけのすき間をあける
   const cellPct=Math.max(6,(100-labelPct-(nCols-1)*gapPct)/nCols);
   const fs=nCols>=5?10:(nCols>=4?11:12);
   let cg='<colgroup>';
@@ -5900,11 +6409,25 @@ function renderSystemChart(ch,editable){
 
   // ── 予選（横長バー）──
   (ch.prelims||[]).forEach((p,i)=>{
+    const pname=scPrelimName(p);
+    let span=scPrelimSpan(p);
+    if(!span||span>nCols)span=nCols;             // 指定なし＝全部の列にまたがる
+    const barCells=Math.min(totalGrid,2*span-1); // 表の中で何マスぶんか
     h+='<tr>';
-    h+=`<td style="text-align:center;padding:4px 1px;color:#444;white-space:normal;word-break:break-word;line-height:1.2;">予選${scCircled(i+1)}</td>`;
-    h+=`<td colspan="${totalGrid}" style="background:${SC_COLORS.gray.bg};border:1px solid ${SC_COLORS.gray.bd};text-align:center;padding:8px;color:#333;font-weight:600;">${scEsc(p)}</td>`;
+    h+=`<td style="text-align:center;padding:4px 1px;color:#444;white-space:nowrap;font-size:${Math.max(9,fs-1)}px;line-height:1.2;">予選${scCircled(i+1)}</td>`;
+    const pc=scPrelimColor(p);
+    /* 左をどれだけ空けるか。列と列のあいだにも1マスあるので、1列ぶん＝2マス。
+       はみ出す指定は、右端に収まるところまで戻す。 */
+    let off=scPrelimOffset(p);
+    if(off+span>nCols)off=Math.max(0,nCols-span);
+    const leadCells=Math.min(Math.max(0,totalGrid-barCells),2*off);
+    if(leadCells>0)h+=`<td colspan="${leadCells}"></td>`;
+    h+=`<td data-prelim="${i}" colspan="${barCells}" style="background:${pc.bg};border:1px solid ${pc.bd};text-align:center;padding:8px;color:${pc.tx};font-weight:600;">${scEsc(pname)}</td>`;
+    const usedCells=leadCells+barCells;
+    if(usedCells<totalGrid)h+=`<td colspan="${totalGrid-usedCells}"></td>`;
     h+='</tr>';
-    h+=`<tr><td colspan="${totalGrid+1}" style="height:7px;"></td></tr>`;
+    // 予選のバーの下の空き ＝ 矢印がここを横に通れる「通路」
+    h+=`<tr data-parow="${i}"><td colspan="${totalGrid+1}" style="height:26px;"></td></tr>`;
   });
 
   // ── トーナメント本体 ──
@@ -5919,33 +6442,27 @@ function renderSystemChart(ch,editable){
       h+='</tr>';
     }
     h+='<tr>';
-    h+=`<td style="text-align:center;padding:3px 1px;color:#444;white-space:normal;word-break:break-word;line-height:1.2;">${scEsc(rowLabels[r]||('[第'+(r+1)+'試合]'))}</td>`;
+    h+=`<td style="text-align:center;padding:3px 1px;color:#444;white-space:nowrap;font-size:${Math.max(9,fs-1)}px;line-height:1.2;">${scEsc(rowLabels[r]||('第'+(r+1)+'試合'))}</td>`;
     for(let c=0;c<nCols;c++){
       if(hasCell(c,r)){
         const cc=scCellData(ch,cols[c],r);
-        h+=`<td style="background:${cc.bg};border:1px solid ${cc.bd};color:${cc.tx};text-align:center;padding:7px 3px;font-weight:600;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.25;">${scEsc(cellOf(c,r))}</td>`;
+        const ed=editable?` class="sc-box" data-c="${c}" data-r="${r}" title="タップすると「負けたチームの行き先」を選べます"`:'';
+        const cur=editable?'cursor:pointer;':'';
+        h+=`<td data-cell="${c},${r}"${ed} style="${cur}background:${cc.bg};border:1px solid ${cc.bd};color:${cc.tx};text-align:center;padding:7px 3px;font-weight:600;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.25;">${scEsc(cellOf(c,r))}</td>`;
       }else{
-        h+='<td></td>';
+        h+=`<td data-cell="${c},${r}"></td>`;
       }
-      if(c<nCols-1)h+=`<td></td>`;
+      if(c<nCols-1)h+=`<td data-gap="${c},${r}"></td>`;
     }
     h+='</tr>';
+    // 行と行のあいだ（勝ち矢印 ↓ を置く場所。負け矢印は上に重ねる絵で描く）
     if(r<maxRows-1){
-      h+='<tr><td></td>';
+      // 行と行のあいだ ＝ 矢印の「通路」。data-arow で場所を測れるようにしておく
+      h+=`<tr data-arow="${r}"><td></td>`;
       for(let c=0;c<nCols;c++){
         const win=hasCell(c,r)&&hasCell(c,r+1);
-        h+=`<td style="text-align:center;padding:0;height:16px;">${win?'<span style="color:#E24B4A;font-size:13px;font-weight:900;">↓</span>':''}</td>`;
-        if(c<nCols-1){
-          const active=loseActive(c,r);
-          const toggleable=hasCell(c,r)&&hasCell(c+1,r+1);
-          const arrow='<span style="display:inline-block;background:#DCEBFA;color:#2e72c4;border-radius:4px;padding:0 2px;font-size:11px;font-weight:900;line-height:1.4;">↘</span>';
-          if(editable&&toggleable){
-            const auto=loseAuto(c,r)?1:0;
-            h+=`<td class="sc-arrow" data-k="${scEsc(loseKey(c,r))}" data-auto="${auto}" title="タップで負け矢印を表示／非表示" style="cursor:pointer;text-align:center;padding:0;vertical-align:middle;">${active?arrow:'<span style="opacity:0.28;font-size:12px;color:#2E8B57;font-weight:900;">↘</span>'}</td>`;
-          }else{
-            h+=`<td style="text-align:center;padding:0;vertical-align:middle;">${active?arrow:''}</td>`;
-          }
-        }
+        h+=`<td style="text-align:center;padding:0;height:36px;vertical-align:middle;">${win?'<span style="color:#E24B4A;font-size:13px;font-weight:900;">↓</span>':''}</td>`;
+        if(c<nCols-1)h+=`<td></td>`;
       }
       h+='</tr>';
     }
@@ -5960,28 +6477,636 @@ function renderSystemChart(ch,editable){
         return`<div style="display:flex;align-items:center;gap:6px;"><span style="display:inline-block;width:26px;height:14px;background:${cc.bg};border:1px solid ${cc.bd};border-radius:3px;"></span><span style="font-size:12px;color:#374151;">${scEsc(x.label)}</span></div>`;
       }).join('')+'</div>';
   }
-  // 矢印の凡例
   const arrowLegend='<div style="display:flex;flex-wrap:wrap;gap:14px;justify-content:center;margin-bottom:10px;">'+
     '<span style="font-size:11px;color:#374151;"><span style="color:#E24B4A;font-weight:900;">↓</span> 勝ち（次の回戦へ）</span>'+
-    '<span style="font-size:11px;color:#374151;"><span style="display:inline-block;background:#DCEBFA;color:#2e72c4;border-radius:4px;padding:0 3px;font-weight:900;">↘</span> 負け（右のトーナメントへ）</span>'+
-    '</div>';
-  return legend+arrowLegend+`<div style="width:100%;padding:2px 0 6px;">${h}</div>`;
+    '<span style="font-size:11px;color:#374151;"><span style="color:#2e72c4;font-weight:900;">━▶</span> 負け（別のトーナメントへ）</span>'+
+    '<span style="font-size:11px;color:#374151;"><span style="color:#333;font-weight:900;">━▶</span> 予選からの進み先</span>'+
+    '</div>'+
+    '<div style="font-size:10.5px;color:#9ca3af;text-align:center;margin-bottom:10px;line-height:1.6;">負けの矢印は、出発するトーナメントごとに色を分けています。<br>点線は、回戦を1つ飛ばして進む矢印です。</div>';
+  return legend+arrowLegend+`<div class="sc-chart" data-sc-id="${regId}" style="position:relative;width:100%;padding:2px 0 6px;">${h}<svg class="sc-links" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible;"></svg></div>`;
 }
 
+/* 表の上に矢印を描く（表を画面に出したあとに呼ぶ）。
+
+   【8-6 手直し2】線が箱の上を横切らないよう、通り道を決めてから引く。
+     ・箱の「下辺」から出て、行と行のあいだ（通路）へ下りる
+     ・通路を横に進む（箱の中は通らない）
+     ・回戦を飛ばす場合は、列と列のあいだ（すき間）を縦に下りる
+     ・箱の「上辺」から入る
+   出口と入口は箱の中心から左右にずらしてあるので、
+   勝ちの ↓ 矢印や、ほかの矢印と重なりにくい。
+   線の色は「出発するトーナメント」ごとに変えている。 */
+/* 負けの矢印の色。ぜんぶ「青の仲間」でそろえてあるので、
+   色が違っても「これは負けの矢印だ」と分かる。
+   何番めの色になるかは「出発するトーナメント」で決まる。 */
+const SC_LINK_COLORS=['#1d4ed8','#0891b2','#38a3f0','#4f46e5','#0e7490','#60a5fa'];
+/* 【8-8】矢印をタップして消す
+     l.src==='lose' … 負けの矢印。「表示しない」印を付ける（あとで箱をタップすれば戻せる）
+     l.src==='link' … テンプレなどが持っている矢印。その1本だけを取り除く         */
+function scDeleteLink(ch,l){
+  if(!ch||!l)return false;
+  if(l.src==='link'){
+    if(ch.links&&l.li!=null&&l.li>=0&&l.li<ch.links.length){ch.links.splice(l.li,1);return true;}
+    return false;
+  }
+  if(!l.key)return false;
+  ch.loseArrows=ch.loseArrows||{};
+  ch.loseArrows[l.key]=false;
+  if(ch.loseTo)delete ch.loseTo[l.key];
+  return true;
+}
+
+function scPaint(root){
+  try{
+    const reg=SC_REG[root.getAttribute('data-sc-id')];if(!reg)return;
+    const svg=root.querySelector('svg.sc-links');if(!svg)return;
+    const rb=root.getBoundingClientRect();
+    if(!rb.width||!rb.height){svg.innerHTML='';return;}
+    const q=sel=>root.querySelector(sel);
+    const rect=el=>{if(!el)return null;const b=el.getBoundingClientRect();
+      return{x:b.left-rb.left,y:b.top-rb.top,w:b.width,h:b.height,cx:b.left-rb.left+b.width/2,cy:b.top-rb.top+b.height/2};};
+    const boxOf=ref=>ref.k==='prelim'?rect(q('[data-prelim="'+ref.i+'"]')):rect(q('[data-cell="'+ref.c+','+ref.r+'"]'));
+    const gapBox=(gi,r)=>rect(q('[data-gap="'+gi+','+r+'"]'));
+    const arow=r=>rect(q('[data-arow="'+r+'"]'));
+    const parow=i=>rect(q('[data-parow="'+i+'"]'));
+    /* 通路の中の「上寄り」の高さ。
+       通路の真ん中には勝ちの ↓ が入るので、そこを避けて上側を横に通す。
+       箱への入り口はここから下りるので、矢印の先が十分な長さになる。 */
+    const corTop=r=>{const b=arow(r);return b?(b.y+6):null;};
+
+    const links=scCollectLinks(reg.ch,reg.cols);
+
+    // 同じすき間を縦に通る矢印は、少しずつ横へずらして重ならないようにする
+    const groups={},lane={};
+    links.forEach((l,i)=>{
+      if(l.from.k!=='cell'||l.to.k!=='cell')return;
+      if(l.to.r<=l.from.r+1)return;
+      const gi=(l.to.c>l.from.c)?(l.to.c-1):l.to.c;
+      (groups[gi]=groups[gi]||[]).push(i);
+    });
+    Object.keys(groups).forEach(gi=>{const a=groups[gi];a.forEach((idx,k)=>{lane[idx]=k-(a.length-1)/2;});});
+
+    const colorOf=l=>{
+      if(l.kind!=='lose')return '#333333';                     // 予選からの進み先などは黒
+      const i=(l.ci!=null)?l.ci:(l.from.k==='cell'?(l.from.c||0):0);
+      return SC_LINK_COLORS[i%SC_LINK_COLORS.length];
+    };
+    const ckey=c=>c.replace('#','');
+    const used={};
+    links.forEach(l=>{used[colorOf(l)]=1;});
+    const mid='scmk_'+root.getAttribute('data-sc-id');
+    let defs='<defs>';
+    Object.keys(used).forEach(c=>{
+      defs+='<marker id="'+mid+'_'+ckey(c)+'" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="6" markerHeight="6" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="'+c+'"/></marker>';
+    });
+    defs+='</defs>';
+    const parts=[defs];
+    const hits=[];   // 【8-8】矢印を押せるようにする透明な線（編集中だけ）
+
+    links.forEach((l,idx)=>{
+      const A=boxOf(l.from),B=boxOf(l.to);
+      if(!A||!B)return;
+      const color=colorOf(l);
+      const mk=mid+'_'+ckey(color);
+      let d,lx,ly,anchor='middle',dash='';
+
+      if(l.from.k==='prelim'&&!(B.cx>=A.x+4&&B.cx<=A.x+A.w-4)){
+        /* 予選のバーの真下に行き先が無い場合（バーが短いとき）。
+           バーの端から出て、バーの下の通路を横に進んでから、箱の上辺へ下りる。 */
+        const right=(B.cx>A.cx);
+        const exX=right?(A.x+A.w-12):(A.x+12);
+        const enX=B.cx+(right?-B.w*0.30:B.w*0.30);
+        const pb=parow(l.from.i);
+        const y1=pb?pb.cy:(A.y+A.h+12);
+        d='M'+exX+','+(A.y+A.h+1)+' L'+exX+','+y1+' L'+enX+','+y1+' L'+enX+','+(B.y-3);
+        lx=(exX+enX)/2;ly=y1;anchor='middle';
+      }else if(l.from.k==='cell'&&l.to.k==='cell'&&l.from.r===l.to.r&&l.from.c!==l.to.c){
+        /* 【追加 2026-10-14】同じ段（同じ試合）の箱どうしは、横にまっすぐ1本で引く。
+           例）5位タイ決定T 1回戦 →（不戦勝の場合）→ 不戦勝交流戦②
+           箱の横の辺から出て、行き先の箱の横の辺に入る。文字は線の上に置く。 */
+        const right=l.to.c>l.from.c;
+        const y=A.cy;
+        const sx=right?(A.x+A.w+1):(A.x-1);
+        const ex=right?(B.x-3):(B.x+B.w+3);
+        d='M'+sx+','+y+' L'+ex+','+y;
+        lx=(sx+ex)/2;ly=y-9;anchor='middle';
+      }else if(l.from.k==='prelim'||(l.from.k==='cell'&&l.to.k==='cell'&&l.from.c===l.to.c)){
+        // まっすぐ下へ（予選のバー → 真下の箱）
+        const x=B.cx;
+        d='M'+x+','+(A.y+A.h+1)+' L'+x+','+(B.y-3);
+        const toRight=(x>rb.width*0.55);
+        // 文字は線の出だし（バーのすぐ下）に置く。こうすると複数の矢印で高さがそろう。
+        lx=x+(toRight?-6:6);ly=A.y+A.h+13;anchor=toRight?'end':'start';
+      }else{
+        const right=l.to.c>l.from.c;
+        const exX=A.cx+(right?A.w*0.30:-A.w*0.30);   // 出口（箱の下辺）
+        const enX=B.cx+(right?-B.w*0.30:B.w*0.30);   // 入口（箱の上辺）
+        let y1=corTop(l.from.r); if(y1==null)y1=A.y+A.h+9;
+        if(l.to.r===l.from.r+1){
+          d='M'+exX+','+(A.y+A.h+1)+' L'+exX+','+y1+' L'+enX+','+y1+' L'+enX+','+(B.y-3);
+          lx=(exX+enX)/2;ly=y1;anchor='middle';
+        }else{
+          const gi=right?(l.to.c-1):l.to.c;
+          const gb=gapBox(gi,l.to.r)||gapBox(gi,l.from.r);
+          const gw=gb?gb.w:14;
+          let chx=(gb?gb.cx:(right?(B.x-8):(B.x+B.w+8)))+(lane[idx]||0)*Math.min(7,Math.max(3,gw/3));
+          let y2=corTop(l.to.r-1); if(y2==null)y2=B.y-24;
+          d='M'+exX+','+(A.y+A.h+1)+' L'+exX+','+y1+' L'+chx+','+y1+' L'+chx+','+y2+' L'+enX+','+y2+' L'+enX+','+(B.y-3);
+          dash=' stroke-dasharray="5 3"';   // 回戦を飛ばして進む矢印は点線
+          // 文字は、行き先の箱の手前（空いている通路）に置く
+          lx=(chx+enX)/2;ly=y2;anchor='middle';
+        }
+      }
+      parts.push('<path d="'+d+'" fill="none" stroke="'+color+'" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"'+dash+' marker-end="url(#'+mk+')"/>');
+      // 【8-8】編集中は、矢印の上に「押せる透明な太い線」を重ねておく（細い矢印でも指で押せるように）
+      if(reg.editable)hits.push('<path class="sc-hit" data-i="'+idx+'" d="'+d+'" fill="none" stroke="rgba(0,0,0,0)" stroke-width="16" stroke-linejoin="round" stroke-linecap="round" style="pointer-events:stroke;cursor:pointer;"><title>タップすると、この矢印を消せます</title></path>');
+      const txt=l.label||'';
+      if(txt)parts.push('<text x="'+lx+'" y="'+ly+'" font-size="10" font-weight="700" fill="'+color+'" text-anchor="'+anchor+'" dominant-baseline="middle" stroke="#fff" stroke-width="3.5" paint-order="stroke" style="paint-order:stroke;">'+scEsc(txt)+'</text>');
+    });
+    svg.setAttribute('width',rb.width);
+    svg.setAttribute('height',rb.height);
+    svg.innerHTML=parts.concat(hits).join('');
+
+    // 【8-8】矢印をタップしたら、その矢印を消す（管理者のプレビューのときだけ）
+    if(reg.editable){
+      svg.querySelectorAll('path.sc-hit').forEach(p=>{
+        p.addEventListener('click',ev=>{
+          ev.stopPropagation();
+          const l=links[parseInt(p.getAttribute('data-i'),10)];
+          if(!l)return;
+          const nm=(l.kind==='lose')?'負けの矢印':'矢印';
+          if(!confirm('この'+nm+'を消しますか？\n\n（消したあとでも、出発する箱をタップして行き先を選び直せば元に戻せます）'))return;
+          if(!scDeleteLink(reg.ch,l))return;
+          if(window.SC_AFTER_ARROW_EDIT)window.SC_AFTER_ARROW_EDIT();
+          else scPaintAll();
+        });
+      });
+    }
+  }catch(e){}
+}
+function scPaintAll(){try{document.querySelectorAll('.sc-chart').forEach(scPaint);}catch(e){}}
+window.addEventListener('resize',function(){clearTimeout(window._scRepaintT);window._scRepaintT=setTimeout(scPaintAll,150);});
+
+
+/* =========================================================================
+   【8-6】試合システム図：「負けたチームの行き先」を選ぶ小さな画面
+   管理者画面のプレビューで、うすい ↘ をタップすると出てくる。
+     ch  … 図のデータ
+     key … '列名@行番号'（どの試合の負けか）
+     c   … 出発の列の番号 / r … 行の番号
+   選んだ結果は ch.loseTo（行き先の列名）と ch.loseArrows（表示する/しない）に入る。
+   ========================================================================= */
+function showScArrowMenu(ch,c,r,done){
+  const cols=scRepairCols(ch.columns||[]);
+  if(!cols[c])return;
+  const key=cols[c].name+'@'+r;
+  const cellOf=(ci,ri)=>{const col=cols[ci];if(!col)return null;const i=ri-(col.startRow||0);return(i>=0&&i<col.cells.length)?col.cells[i]:null;};
+  const plain=s=>String(s==null?'':s).replace(/\\n|<br\s*\/?>/ig,' ');
+  // 行き先の候補＝ほかの列にある、これより下の行の箱（3行下まで）
+  const cands=[];
+  for(let s=r+1;s<=r+3;s++){
+    for(let d=0;d<cols.length;d++){
+      if(d===c)continue;
+      const v=cellOf(d,s);
+      if(v==null||v==='')continue;
+      cands.push({c:d,r:s,name:cols[d].name,cell:v});
+    }
+  }
+  // いまの設定
+  let curC=c+1,curR=r+1;
+  const raw=ch.loseTo&&ch.loseTo[key];
+  if(raw){const p=scSplitRef(raw);const i=cols.findIndex(x=>x.name===p.name);if(i>=0){curC=i;curR=(p.row==null)?r+1:p.row;}}
+  const curOff=!!(ch.loseArrows&&ch.loseArrows[key]===false);
+  const fromCell=cellOf(c,r)||'';
+  const btn=(label,val,on)=>`<button class="sc-dest-btn" data-v="${scEsc(val)}" style="width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;border:2px solid ${on?'#1D9E75':'#e5e7eb'};border-radius:10px;background:${on?'#E1F5EE':'#fff'};font-size:14px;font-weight:600;color:#111;cursor:pointer;">${label}</button>`;
+  let list='';
+  cands.forEach(x=>{
+    const on=(!curOff)&&curC===x.c&&curR===x.r;
+    list+=btn(scEsc(plain(x.name))+'　<span style="font-weight:400;color:#6b7280;">'+scEsc(x.cell)+'</span> へ',x.c+','+x.r,on);
+  });
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1200;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML=`<div style="background:#fff;border-radius:12px;padding:18px;width:100%;max-width:400px;max-height:82vh;overflow-y:auto;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">負けたチームの行き先</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:14px;line-height:1.6;">「${scEsc(plain(cols[c].name))}」の <b>${scEsc(fromCell)}</b> で負けたチームが、次にどこへ行くかを選びます。左右どちらの列でも、2つ下の回戦でも選べます。</div>
+    ${list||'<div style="font-size:13px;color:#9ca3af;margin-bottom:8px;">行き先になる試合がありません</div>'}
+    ${btn('矢印を表示しない（ここで終わり）','',curOff)}
+    <button id="sc-dest-close" style="width:100%;padding:11px;border:none;border-radius:10px;background:#f3f4f6;color:#374151;font-size:14px;font-weight:600;cursor:pointer;margin-top:4px;">閉じる</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close=()=>{if(overlay.parentNode)document.body.removeChild(overlay);};
+  overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+  const cb=overlay.querySelector('#sc-dest-close');if(cb)cb.onclick=close;
+  overlay.querySelectorAll('.sc-dest-btn').forEach(b=>{
+    b.onclick=()=>{
+      ch.loseArrows=ch.loseArrows||{};ch.loseTo=ch.loseTo||{};
+      const v=b.dataset.v||'';
+      if(!v){ ch.loseArrows[key]=false; delete ch.loseTo[key]; }
+      else{
+        const pr=v.split(',');const d=parseInt(pr[0],10),s=parseInt(pr[1],10);
+        if(d===c+1&&s===r+1)delete ch.loseTo[key];
+        else ch.loseTo[key]=cols[d].name+(s===r+1?'':('@'+s));
+        ch.loseArrows[key]=true;
+      }
+      close();
+      if(done)done();
+    };
+  });
+}
+
+/* =========================================================================
+   【8-6】試合システム図のテンプレート
+
+   ・SC_BUILTIN_TEMPLATES … アプリに最初から入っている形。大会ごとにボタン1つで読み込める。
+   ・AD.chartTemplates    … 「いまの図」に名前を付けて保存したもの（この端末に保存される）。
+
+   図のデータは色や矢印の設定も丸ごと持っているので、読み込めばそのまま完成した形になる。
+   読み込んだあと、構成テキストや色・矢印を自由に直せる。
+   ========================================================================= */
+const SC_BUILTIN_TEMPLATES=[
+  {
+    id:'sc_bi_6696',
+    ver:3,   // ★内容を直したらこの数字を1つ増やす（端末側に「最新に更新」ボタンが出る）
+    name:'66〜96チーム型（決勝トーナメント＋Bトーナメント＋交流戦）',
+    desc:'一次予選3試合 →（上位64チーム）二次予選 → 決勝トーナメント。二次予選で負けたチームと、一次予選の次点32チームはBトーナメントへ。行は試合区分（第1試合〜第6試合）に合わせています。対戦表D（66〜96）用。',
+    chart:{
+      enabled:true,cornerLabel:'',
+      // 一次予選①〜③は全チーム。二次予選は上位64チームだけなので、左側だけの短いバーにする（span:1）
+      prelims:['一次予選①','一次予選②','一次予選③',{name:'二次予選',span:1,color:'green'}],
+      // 行の名前は「試合区分」の設定に合わせる（第1試合〜第6試合）
+      rowLabels:['第1試合','第2試合','第3試合','第4試合','第5試合','第6試合'],
+      legend:[{label:'表裏',color:'gray'},{label:'3先',color:'pink'},{label:'2先',color:'green'}],
+      // 左：決勝トーナメント／真ん中：交流戦／右：Bトーナメント（交流戦へ左右両方から入る）
+      columns:[
+        {name:'決勝\\nトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','準決勝','決勝・3決']},
+        {name:'交流戦',startRow:1,note:'任意参加',cells:['交流戦①','交流戦②']},
+        {name:'Bトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','4回戦','準決勝','決勝・3決']}
+      ],
+      colors:{'決勝\\nトーナメント':'pink','交流戦':'green','Bトーナメント':'green'},
+      cellColors:{},
+      // 矢印は自動では出さず、下の3本だけを出す
+      autoLose:false,
+      loseArrows:{'決勝\\nトーナメント@0':true,'Bトーナメント@0':true,'Bトーナメント@1':true},
+      loseTo:{
+        '決勝\\nトーナメント@0':'交流戦@2',   // 決勝T1回戦で負け → 交流戦②
+        'Bトーナメント@0':'交流戦',           // Bトーナメント1回戦で負け → 交流戦①
+        'Bトーナメント@1':'交流戦'            // Bトーナメント2回戦で負け → 交流戦②
+      },
+      // 予選からの進み先
+      links:[
+        {from:'予選@2',to:'予選@3',kind:'plain',label:'上位64チーム'},
+        {from:'予選@2',to:'Bトーナメント@0',kind:'plain',label:'次点32チーム'},
+        {from:'予選@3',to:'決勝\\nトーナメント@0',kind:'plain',label:'勝ち'},
+        {from:'予選@3',to:'Bトーナメント@0',kind:'lose',ci:0,label:'負け'}
+      ]
+    }
+  },
+  {
+    id:'sc_bi_97128',
+    ver:1,   // ★内容を直したらこの数字を1つ増やす（端末側に「最新に更新」ボタンが出る）
+    name:'97〜128チーム型（決勝トーナメント＋Bトーナメント＋交流戦4つ）',
+    desc:'一次予選3試合 →（上位64チーム）二次予選 → 決勝トーナメント。65〜96位はBトーナメントへ、97位以下は予選敗退で任意の交流戦①へ。二次予選で負けたチームもBトーナメントへ。決勝トーナメント・Bトーナメントで負けたチームは、交流戦②③④へ順に移ります。行は試合区分（第1試合〜第6試合）に合わせています。対戦表D（97〜128）用。',
+    chart:{
+      enabled:true,cornerLabel:'',
+      // 一次予選①〜③は全チーム。二次予選は上位64チームだけなので、左側だけの短いバーにする（span:1）
+      prelims:['一次予選①','一次予選②','一次予選③',{name:'二次予選',span:1,color:'green'}],
+      // 行の名前は「試合区分」の設定に合わせる（第1試合〜第6試合）
+      rowLabels:['第1試合','第2試合','第3試合','第4試合','第5試合','第6試合'],
+      legend:[{label:'表裏',color:'gray'},{label:'3先',color:'pink'},{label:'2先',color:'green'}],
+      // 左：決勝トーナメント／真ん中：交流戦（4つ）／右：Bトーナメント（交流戦へ左右両方から入る）
+      columns:[
+        {name:'決勝\\nトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','準決勝','決勝・3決']},
+        {name:'交流戦',startRow:0,note:'任意参加',cells:['交流戦①','交流戦②','交流戦③','交流戦④']},
+        {name:'Bトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','4回戦','準決勝','決勝・3決']}
+      ],
+      colors:{'決勝\\nトーナメント':'pink','交流戦':'green','Bトーナメント':'green'},
+      cellColors:{},
+      /* 矢印は自動では出さず、下の6本だけを出す。
+           ・決勝トーナメント 1回戦／2回戦／3回戦 で負け → 交流戦②／③／④
+           ・Bトーナメント   1回戦／2回戦／3回戦 で負け → 交流戦②／③／④
+         ＠のうしろは「上から何行目か」（0から数える）。
+         交流戦は一番上の行から始まるので、交流戦①＝@0、②＝@1、③＝@2、④＝@3。 */
+      autoLose:false,
+      loseArrows:{
+        '決勝\\nトーナメント@0':true,'決勝\\nトーナメント@1':true,'決勝\\nトーナメント@2':true,
+        'Bトーナメント@0':true,'Bトーナメント@1':true,'Bトーナメント@2':true
+      },
+      loseTo:{
+        '決勝\\nトーナメント@0':'交流戦@1',   // 決勝T1回戦で負け → 交流戦②
+        '決勝\\nトーナメント@1':'交流戦@2',   // 決勝T2回戦で負け → 交流戦③
+        '決勝\\nトーナメント@2':'交流戦@3',   // 決勝T3回戦で負け → 交流戦④
+        'Bトーナメント@0':'交流戦@1',         // Bトーナメント1回戦で負け → 交流戦②
+        'Bトーナメント@1':'交流戦@2',         // Bトーナメント2回戦で負け → 交流戦③
+        'Bトーナメント@2':'交流戦@3'          // Bトーナメント3回戦で負け → 交流戦④
+      },
+      // 予選からの進み先
+      links:[
+        {from:'予選@2',to:'予選@3',kind:'plain',label:'上位64チーム'},
+        {from:'予選@2',to:'Bトーナメント@0',kind:'plain',label:'65〜96位'},
+        {from:'予選@2',to:'交流戦@0',kind:'plain',label:'97位以下（予選敗退）'},
+        {from:'予選@3',to:'決勝\\nトーナメント@0',kind:'plain',label:'勝ち'},
+        {from:'予選@3',to:'Bトーナメント@0',kind:'lose',ci:0,label:'負け'}
+      ]
+    }
+  },
+  {
+    id:'sc_bi_singles_b',
+    ver:2,   // ★内容を直したらこの数字を1つ増やす（端末側に「最新に更新」ボタンが出る）
+    name:'シングルス112〜128人型（決勝トーナメント＋Lトーナメント＋Bトーナメント）',
+    desc:'シングルス対戦表B（112〜128）用。一次予選3試合のあと、1〜32位は決勝トーナメントへ直行、33〜96位は二次予選へ、97位以下はBトーナメントへ進みます。二次予選に勝てば決勝トーナメント、負ければBトーナメント。決勝トーナメント1回戦で負けた人はLトーナメントの2回戦へ（1回戦を飛ばして）、Bトーナメント1回戦で負けた人はLトーナメントの1回戦へ移ります。Lトーナメントの決勝だけ「3ソロ2先」（黄色）です。',
+    chart:{
+      enabled:true,cornerLabel:'',
+      // 一次予選①〜③は全員。二次予選は33〜96位だけなので、左側だけの短いバーにする（span:1）
+      // 二次予選は33〜96位だけ。図に合わせて真ん中（Lトーナメントの上）に置く
+      prelims:['一次予選①','一次予選②','一次予選③',{name:'二次予選',span:1,offset:1,color:'green'}],
+      rowLabels:['第1試合','第2試合','第3試合','第4試合','第5試合','第6試合','第7試合'],
+      // 「3ソロ2先」＝3人で同時に行う2セット先取。Lトーナメントの決勝だけこの形（黄色）
+      legend:[{label:'表裏',color:'gray'},{label:'3先',color:'pink'},{label:'2先',color:'green'},{label:'3ソロ2先',color:'yellow'}],
+      // 左：決勝トーナメント／真ん中：Lトーナメント／右：Bトーナメント
+      columns:[
+        {name:'決勝\\nトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','4回戦','準決勝','決勝・3決']},
+        {name:'Lトーナメント',startRow:1,note:'',cells:['1回戦','2回戦','3回戦','4回戦','準決勝','決勝']},
+        {name:'Bトーナメント',startRow:0,note:'',cells:['1回戦','2回戦','3回戦','4回戦','準決勝','決勝・3決']}
+      ],
+      colors:{'決勝\\nトーナメント':'pink','Lトーナメント':'green','Bトーナメント':'green'},
+      // Lトーナメントの決勝（上から7行目＝0から数えて6）だけ黄色にする
+      cellColors:{'Lトーナメント@6':'yellow'},
+      /* 矢印は自動では出さず、下の2本だけを出す。
+           ・決勝トーナメント1回戦で負け → Lトーナメントの【2回戦】（1回戦を飛ばす）
+           ・Bトーナメント1回戦で負け   → Lトーナメントの【1回戦】
+         ＠のうしろは「上から何行目か」（0から数える）。
+         Lトーナメントは1行下から始まるので、1回戦＝@1、2回戦＝@2。 */
+      autoLose:false,
+      loseArrows:{'決勝\\nトーナメント@0':true,'Bトーナメント@0':true},
+      loseTo:{
+        '決勝\\nトーナメント@0':'Lトーナメント@2',
+        'Bトーナメント@0':'Lトーナメント@1'
+      },
+      // 一次予選の順位ごとの進み先と、二次予選の勝ち負け
+      links:[
+        {from:'予選@2',to:'決勝\\nトーナメント@0',kind:'plain',label:'1〜32位'},
+        {from:'予選@2',to:'予選@3',kind:'plain',label:'※33〜96位'},
+        {from:'予選@2',to:'Bトーナメント@0',kind:'plain',label:'97位以下'},
+        {from:'予選@3',to:'決勝\\nトーナメント@0',kind:'plain',label:'勝ち'},
+        {from:'予選@3',to:'Bトーナメント@0',kind:'lose',ci:0,label:'負け'}
+      ]
+    }
+  },
+  {
+    id:'sc_bi_128',
+    ver:2,   // ★内容を直したらこの数字を1つ増やす
+    name:'128チーム型（決勝トーナメント＋5位タイ＋15位タイ＋交流戦）',
+    desc:'予選3試合のあと、4つのトーナメントに分かれる形。対戦表C（128）用の例です。中身は読み込んだあとで直せます。',
+    text:[
+      'タイトル: 128T',
+      '予選: 予選第1試合 | 予選第2試合 | 予選第3試合',
+      '行: 第1試合 | 第2試合 | 第3試合 | 第4試合 | 第5試合 | 第6試合',
+      '凡例: 表裏=gray | 3先=pink | 2先=green',
+      '',
+      '決勝トーナメント | pink | 1 | 上位64チーム | 1回戦, 2回戦, 3回戦, 4回戦, 準決勝, 決勝、3決',
+      '5位タイ\\nトーナメント | green | 1 | 次点64チーム | 1回戦, 2回戦, 3回戦, 4回戦, 5回戦, 5位タイ決定戦',
+      '15位タイ\\nトーナメント | green | 2 |  | 1回戦, 2回戦, 3回戦, 4回戦, 15位タイ決定戦',
+      '交流戦 | green | 3 |  | 1回戦, 2回戦'
+    ].join('\n')
+  },
+  {
+    id:'sc_bi_prelim4_16',
+    ver:1,   // ★内容を直したらこの数字を1つ増やす（端末側に「最新に更新」ボタンが出る）
+    name:'予選4試合型（決勝トーナメント16＋5位タイ決定T＋11位タイ決定T）',
+    desc:'予選4試合のあと、上位16チームは決勝トーナメントへ、次点の2チームは不戦勝交流戦①へ。決勝トーナメント1回戦・2回戦で負けたチームは5位タイ決定Tへ、5位タイ決定Tの1回戦・2回戦で負けたチームは11位タイ決定Tへ移ります。5位タイ決定Tの1回戦が不戦勝になった場合は、不戦勝交流戦②を行います。白い箱は交流戦です。（例：対戦表C（18〜30）など）',
+    chart:{
+      enabled:true,cornerLabel:'',
+      prelims:['予選第1試合','予選第2試合','予選第3試合','予選第4試合'],
+      rowLabels:['第1試合','第2試合','第3試合','第4試合'],
+      legend:[{label:'表裏',color:'gray'},{label:'3先',color:'pink'},{label:'2先',color:'green'},{label:'交流戦',color:'white'}],
+      // 左：決勝トーナメント／5位タイ決定T／11位タイ決定T／右端：不戦勝交流戦②
+      columns:[
+        {name:'決勝\\nトーナメント',startRow:0,note:'上位16チーム',cells:['1回戦','2回戦','準決勝','決勝、3決']},
+        {name:'5位タイ\\n決定T',startRow:0,note:'次点の2チーム',cells:['不戦勝交流戦①','1回戦','2回戦','5位タイ決定戦']},
+        {name:'11位タイ\\n決定T',startRow:2,note:'',cells:['1回戦','11位タイ決定戦']},
+        {name:'不戦勝\\n交流戦',startRow:1,note:'',cells:['不戦勝交流戦②']}
+      ],
+      colors:{'決勝\\nトーナメント':'pink','5位タイ\\n決定T':'green','11位タイ\\n決定T':'green','不戦勝\\n交流戦':'white'},
+      // 5位タイ決定Tの一番上（不戦勝交流戦①）だけ白い箱にする
+      cellColors:{'5位タイ\\n決定T@0':'white'},
+      /* 矢印は自動では出さず、下の4本だけを出す。
+           ・決勝トーナメント 1回戦／2回戦 で負け → 5位タイ決定T 1回戦／2回戦
+           ・5位タイ決定T    1回戦／2回戦 で負け → 11位タイ決定T 1回戦／11位タイ決定戦
+         ＠のうしろは「上から何行目か」（0から数える）。
+         不戦勝交流戦① → 5位タイ決定T 1回戦 の ↓ は、同じ列なので自動で出る。 */
+      autoLose:false,
+      loseArrows:{
+        '決勝\\nトーナメント@0':true,'決勝\\nトーナメント@1':true,
+        '5位タイ\\n決定T@1':true,'5位タイ\\n決定T@2':true
+      },
+      loseTo:{
+        '決勝\\nトーナメント@0':'5位タイ\\n決定T@1',
+        '決勝\\nトーナメント@1':'5位タイ\\n決定T@2',
+        '5位タイ\\n決定T@1':'11位タイ\\n決定T@2',
+        '5位タイ\\n決定T@2':'11位タイ\\n決定T@3'
+      },
+      // 5位タイ決定T 1回戦が不戦勝になったとき → 不戦勝交流戦②
+      links:[
+        {from:'5位タイ\\n決定T@1',to:'不戦勝\\n交流戦@1',kind:'plain',label:'不戦勝の場合'}
+      ]
+    }
+  }
+];
+
+// テンプレート1件から、図のデータを作って返す（元のテンプレートは変えない）
+function scTemplateChart(t){
+  if(!t)return null;
+  if(t.chart)return JSON.parse(JSON.stringify(t.chart));
+  return systemChartFromText(t.text||'');
+}
+
+/* 最初から入っている形を、1回だけ「自分のテンプレ一覧」に入れる。
+   一覧に入れてしまえば、名前も説明も自由に変えられるし、いらなければ消せる。 */
+// 8-6 までにアプリへ入っていた形。すでに使っている端末の引き継ぎ判定に使う。
+const SC_TPL_PRE_8_7_IDS=['sc_bi_6696','sc_bi_128'];
+function scSeedTemplates(force){
+  if(!AD.chartTemplates)AD.chartTemplates=[];
+  /* 【8-7】これまでは「一度でも入れたら、もう二度と入れない」しくみだったため、
+     アプリに新しい形を足しても、すでに使っている端末には出てきませんでした。
+     そこで「どの形を入れたか」を1つずつ覚えるようにして、
+     まだ一度も入れたことのない形だけを自動で足すようにしました。
+     自分で消した形は「入れた」と覚えたままなので、勝手には戻りません。 */
+  if(!Array.isArray(AD.chartTplSeededIds)){
+    // 8-6 までの端末からの引き継ぎ：昔からある2つは「入れた扱い」にしておく
+    AD.chartTplSeededIds=AD.chartTplSeeded?SC_TPL_PRE_8_7_IDS.slice():[];
+  }
+  let added=0;
+  SC_BUILTIN_TEMPLATES.forEach(t=>{
+    if(AD.chartTemplates.some(x=>x.id===t.id))return;              // すでに一覧にある
+    if(!force&&AD.chartTplSeededIds.indexOf(t.id)>=0)return;       // 自分で消した形は戻さない
+    AD.chartTemplates.push({id:t.id,ver:t.ver||1,name:t.name,desc:t.desc||'',chart:scTemplateChart(t)});
+    if(AD.chartTplSeededIds.indexOf(t.id)<0)AD.chartTplSeededIds.push(t.id);
+    added++;
+  });
+  AD.chartTplSeeded=true;
+  saveAdmin(AD);
+  return added;
+}
+
+/* この端末に入っているテンプレが、アプリに入っている最新の形より古いか？
+   ※古くても勝手に書き換えない（名前や説明を自分で直している場合があるため）。
+     一覧に「最新に更新」ボタンを出して、押されたときだけ図を作り直す。 */
+function scTplOutdated(t){
+  if(!t)return false;
+  const b=SC_BUILTIN_TEMPLATES.find(x=>x.id===t.id);
+  if(!b)return false;
+  return (Number(b.ver||1)>Number(t.ver||1));
+}
+
+/* テンプレの名前と説明を書き換える小さな画面 */
+function showScTplEditModal(tpl,done){
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1300;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML=`<div style="background:#fff;border-radius:12px;padding:18px;width:100%;max-width:420px;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:12px;">テンプレの名前と説明</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:4px;">名前</div>
+    <input type="text" id="sct-e-name" value="${scEsc(tpl.name||'')}" style="width:100%;font-size:15px;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;box-sizing:border-box;"/>
+    <div style="font-size:12px;color:#6b7280;margin:10px 0 4px;">説明（自分が分かりやすい言葉でどうぞ）</div>
+    <textarea id="sct-e-desc" rows="4" style="width:100%;font-size:14px;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:8px;box-sizing:border-box;">${scEsc(tpl.desc||'')}</textarea>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button id="sct-e-cancel" style="flex:1;padding:11px;border:none;border-radius:10px;background:#f3f4f6;color:#374151;font-size:14px;font-weight:600;cursor:pointer;">やめる</button>
+      <button id="sct-e-save" style="flex:2;padding:11px;border:none;border-radius:10px;background:#1D9E75;color:#fff;font-size:14px;font-weight:700;cursor:pointer;">保存する</button>
+    </div>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close=()=>{if(overlay.parentNode)document.body.removeChild(overlay);};
+  overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+  overlay.querySelector('#sct-e-cancel').onclick=close;
+  setTimeout(()=>{const i=overlay.querySelector('#sct-e-name');if(i)i.focus();},80);
+  overlay.querySelector('#sct-e-save').onclick=()=>{
+    const nm=String(overlay.querySelector('#sct-e-name').value||'').trim();
+    if(!nm){alert('名前を入力してください');return;}
+    tpl.name=nm;
+    tpl.desc=String(overlay.querySelector('#sct-e-desc').value||'').replace(/\s+$/,'');
+    saveAdmin(AD);
+    close();
+    if(done)done();
+  };
+}
+
+// 「テンプレを読み込む」ボタンの中身
+function showSystemChartTemplateModal(){
+  const _t=(typeof ruleEditTarget==='function')?ruleEditTarget():null;
+  if(!_t||!_t.obj){alert('大会が選択されていません');return;}
+  scSeedTemplates(false);
+  const list=AD.chartTemplates||[];
+  const row=t=>`<div style="display:flex;align-items:center;gap:8px;padding:11px 0;border-bottom:1px solid #f3f4f6;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:700;color:#111;line-height:1.4;">${scEsc(t.name||'（名前なし）')}</div>
+        ${t.desc?`<div style="font-size:12px;color:#6b7280;line-height:1.5;margin-top:2px;white-space:pre-wrap;">${scEsc(t.desc)}</div>`:''}
+        ${scTplOutdated(t)?`<div style="font-size:11px;color:#a16207;margin-top:4px;line-height:1.5;">この端末に入っているのは古い形です。「最新に更新」で作り直せます（名前と説明はそのまま残ります）。</div>`:''}
+      </div>
+      <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
+        <button class="sct-load" data-id="${scEsc(t.id)}" style="padding:7px 12px;border:none;border-radius:8px;background:#2E86DE;color:#fff;font-size:13px;font-weight:700;cursor:pointer;">読み込む</button>
+        ${scTplOutdated(t)?`<button class="sct-upd" data-id="${scEsc(t.id)}" style="padding:5px 8px;border:1.5px solid #E0A800;border-radius:8px;background:#FFF9E6;color:#7a5c00;font-size:12px;font-weight:700;cursor:pointer;">最新に更新</button>`:''}
+        <div style="display:flex;gap:4px;">
+          <button class="sct-edit" data-id="${scEsc(t.id)}" style="flex:1;padding:5px 8px;border:1.5px solid #d1d5db;border-radius:8px;background:#fff;color:#374151;font-size:12px;cursor:pointer;">名前・説明</button>
+          <button class="sct-del" data-id="${scEsc(t.id)}" style="padding:5px 8px;border:1.5px solid #e5a5a5;border-radius:8px;background:#fff;color:#c0392b;font-size:12px;cursor:pointer;">削除</button>
+        </div>
+      </div>
+    </div>`;
+  const overlay=document.createElement('div');
+  overlay.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1200;display:flex;align-items:center;justify-content:center;padding:16px;';
+  overlay.innerHTML=`<div style="background:#fff;border-radius:12px;padding:18px;width:100%;max-width:460px;max-height:84vh;overflow-y:auto;">
+    <div style="font-size:16px;font-weight:700;margin-bottom:4px;">試合システム図のテンプレ</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:14px;line-height:1.6;">読み込むと、いまの図はテンプレの中身に置き換わります（トーナメント名・回戦・色・矢印を含みます）。読み込んだあとから自由に直せます。名前と説明も自由に書き換えられます。</div>
+    ${list.length?list.map(row).join(''):'<div style="font-size:13px;color:#9ca3af;padding:10px 0;">テンプレがありません。下の「最初から入っている形を入れ直す」を押すか、いまの図を保存してください。</div>'}
+    <button id="sct-save" style="width:100%;padding:12px;margin-top:16px;border:1.5px solid #1D9E75;border-radius:10px;background:#fff;color:#0a6e57;font-size:14px;font-weight:700;cursor:pointer;">💾 いまの図に名前を付けて保存する</button>
+    <button id="sct-seed" style="width:100%;padding:11px;margin-top:8px;border:1.5px solid #d1d5db;border-radius:10px;background:#fff;color:#374151;font-size:13px;font-weight:600;cursor:pointer;">＋ 最初から入っている形を入れ直す</button>
+    <button id="sct-close" style="width:100%;padding:11px;margin-top:8px;border:none;border-radius:10px;background:#f3f4f6;color:#374151;font-size:14px;font-weight:600;cursor:pointer;">閉じる</button>
+  </div>`;
+  document.body.appendChild(overlay);
+  const close=()=>{if(overlay.parentNode)document.body.removeChild(overlay);};
+  const reopen=()=>{close();showSystemChartTemplateModal();};
+  overlay.addEventListener('click',e=>{if(e.target===overlay)close();});
+  const cb=overlay.querySelector('#sct-close');if(cb)cb.onclick=close;
+
+  overlay.querySelectorAll('.sct-load').forEach(b=>{
+    b.onclick=()=>{
+      const t=(AD.chartTemplates||[]).find(x=>x.id===b.dataset.id);
+      if(!t)return;
+      const chart=scTemplateChart(t);
+      if(!chart||!chart.columns||!chart.columns.length){alert('このテンプレは中身が空でした');return;}
+      if(_t.obj.systemChart&&_t.obj.systemChart.columns&&_t.obj.systemChart.columns.length){
+        if(!confirm('「'+t.name+'」を読み込みます。\n\nいまの試合システム図は置き換わります（色・矢印の設定もテンプレの内容になります）。よろしいですか？'))return;
+      }
+      _t.obj.systemChart=chart;
+      _t.save();
+      close();
+      render();
+      alert('✅ テンプレ「'+t.name+'」を読み込みました');
+    };
+  });
+  overlay.querySelectorAll('.sct-upd').forEach(b=>{
+    b.onclick=()=>{
+      const t=(AD.chartTemplates||[]).find(x=>x.id===b.dataset.id);
+      const src=SC_BUILTIN_TEMPLATES.find(x=>x.id===b.dataset.id);
+      if(!t||!src)return;
+      if(!confirm('「'+t.name+'」の図を、最新の形に作り直します。\n（名前と説明はそのまま残ります）よろしいですか？'))return;
+      t.chart=scTemplateChart(src);
+      t.ver=src.ver||1;
+      saveAdmin(AD);
+      reopen();
+      setTimeout(()=>alert('✅ 最新の形に更新しました。\n大会に反映するには、このあと「読み込む」を押してください。'),50);
+    };
+  });
+  overlay.querySelectorAll('.sct-edit').forEach(b=>{
+    b.onclick=()=>{
+      const t=(AD.chartTemplates||[]).find(x=>x.id===b.dataset.id);
+      if(!t)return;
+      showScTplEditModal(t,reopen);
+    };
+  });
+  overlay.querySelectorAll('.sct-del').forEach(b=>{
+    b.onclick=()=>{
+      const t=(AD.chartTemplates||[]).find(x=>x.id===b.dataset.id);
+      if(!t)return;
+      if(!confirm('テンプレ「'+t.name+'」を削除します。よろしいですか？\n（いま設定されている大会の図はそのままです）'))return;
+      AD.chartTemplates=(AD.chartTemplates||[]).filter(x=>x.id!==t.id);
+      saveAdmin(AD);
+      reopen();
+    };
+  });
+  const sb=overlay.querySelector('#sct-save');
+  if(sb)sb.onclick=()=>{
+    const ch=_t.obj.systemChart;
+    if(!ch||!ch.columns||!ch.columns.length){alert('先に試合システム図を作ってください。');return;}
+    const tpl={id:'sct_'+Date.now(),name:'新しいテンプレ',desc:'',chart:JSON.parse(JSON.stringify(ch))};
+    if(!AD.chartTemplates)AD.chartTemplates=[];
+    AD.chartTemplates.push(tpl);
+    saveAdmin(AD);
+    showScTplEditModal(tpl,reopen);
+  };
+  const sd=overlay.querySelector('#sct-seed');
+  if(sd)sd.onclick=()=>{
+    const n=scSeedTemplates(true);
+    reopen();
+    setTimeout(()=>alert(n?('✅ '+n+'件を入れ直しました'):'すでに全部そろっています'),50);
+  };
+}
 
 // ===== チームNo検索：一覧HTML生成（キーワードでチーム名を部分一致絞り込み） =====
 function buildTeamSearchList(query){
-  const tour=activeTour()||{teams:[]};
+  /* 【1-5・8-7にそろえた】ここが activeTour()（＝開催中の大会）を直接見ていたため、
+     開催前の大会のカードから開いても、開催中の大会の一覧が出てしまっていた。
+     大会情報の画面が見ている大会（tiTour）に合わせる。 */
+  const tour=tiTour()||{teams:[]};
   const teams=(tour.teams||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
   const q=String(query||'').trim().toLowerCase();
   const filtered=q?teams.filter(t=>String(t.name||'').toLowerCase().includes(q)||String(t.id||'').includes(q)):teams;
+  const tsW=wTeam(tiTour()||null);   // シングルス大会なら「選手」、それ以外は「チーム」
   if(teams.length===0){
-    return`<div style="text-align:center;padding:24px;color:#9ca3af;font-size:14px;">参加チームが登録されていません</div>`;
+    return`<div style="text-align:center;padding:24px;color:#9ca3af;font-size:14px;">参加${tsW}が登録されていません</div>`;
   }
   if(filtered.length===0){
-    return`<div style="text-align:center;padding:24px;color:#9ca3af;font-size:14px;">「${query}」に一致するチームが見つかりませんでした</div>`;
+    return`<div style="text-align:center;padding:24px;color:#9ca3af;font-size:14px;">「${query}」に一致する${tsW}が見つかりませんでした</div>`;
   }
-  return`<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">${filtered.length}チーム${q?'が一致':'を表示中'}</div>`
+  return`<div style="font-size:12px;color:#6b7280;margin-bottom:8px;">${filtered.length}${tsW}${q?'が一致':'を表示中'}</div>`
     +filtered.map(t=>`<div style="display:flex;align-items:center;gap:12px;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:12px 14px;margin-bottom:8px;">
       <div style="background:#FFF3CC;color:#8a6d00;border-radius:8px;padding:6px 10px;font-size:14px;font-weight:800;min-width:64px;text-align:center;">No.${t.id}</div>
       <div style="flex:1;font-size:15px;font-weight:700;color:#111;">${t.name||''}</div>
@@ -5990,7 +7115,8 @@ function buildTeamSearchList(query){
 
 // ===== 対戦コート検索画面 =====
 function rTournamentInfo(){
-  const tour=AD.tournaments&&AD.activeTourId?AD.tournaments.find(t=>t.id===AD.activeTourId):null;
+  // 【8-7】大会カードのボタンから開いたときは、そのカードの大会を見る
+  const tour=tiTour();
   const tname=tour?tour.name:'';
   const v=S._tiView; // null=メニュー / 'schedule' / 'regulation' / 'prelim' / 'venue'
 
@@ -6094,11 +7220,74 @@ function rTournamentInfo(){
             <th style="padding:8px 10px;border-bottom:2px solid #111;text-align:left;font-size:13px;color:#374151;">試合区分</th>
             <th style="padding:8px 10px;border-bottom:2px solid #111;text-align:left;font-size:13px;color:#374151;">時間</th>
           </tr></thead>
-          <tbody>${rows.map((r,i)=>`<tr style="background:${i%2===0?'#fff':'#f9fafb'};">
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${r.name||''}</td>
-            <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${r.time||''}</td>
-          </tr>`).join('')}</tbody>
+          <tbody>${(()=>{
+            /* 【8-6】決勝トーナメントとBトーナメントで途中から進み方が変わる大会に対応。
+               スプレッドシートから届く3種類を、それぞれこう表示する。
+                 type:'header' … 見出しの行（時間が入っていない行）→ 灰色の帯で区切る。前に1行空ける
+                 type:'gap'    … シートの空行            → そのまま1行空ける
+                 type:'row'    … ふつうの行              → 区分と時間を並べる
+               ※見出しの直前の空行は、見出し側で空きを入れるので二重にしない。
+               ※古い対戦表からは type が届かないので、その場合は今までどおりの表になる。 */
+            const items=rows.map(r=>{
+              const nm=String(r.name==null?'':r.name).trim();
+              const tm=String(r.time==null?'':r.time).trim();
+              if(r.type==='gap'||(nm===''&&tm===''))return{k:'gap'};
+              if(r.type==='header'||(nm!==''&&tm===''))return{k:'head',name:nm};
+              return{k:'row',name:nm,time:tm};
+            });
+            const spacer='<tr><td colspan="2" style="height:14px;padding:0;border:none;background:#fff;"></td></tr>';
+            let out='',zebra=0,started=false,pendingGap=false;
+            items.forEach(it=>{
+              if(it.k==='gap'){ if(started)pendingGap=true; return; }
+              if(it.k==='head'){
+                if(started)out+=spacer;      // 見出しの前は必ず1行分あける
+                pendingGap=false;zebra=0;started=true;
+                out+=`<tr><td colspan="2" style="padding:9px 10px;background:#ececec;border-top:2px solid #111;border-bottom:1px solid #cfcfcf;font-size:14px;font-weight:800;color:#111;">${it.name}</td></tr>`;
+                return;
+              }
+              if(pendingGap){out+=spacer;pendingGap=false;zebra=0;}
+              const bg=(zebra++%2===0)?'#fff':'#f9fafb';
+              out+=`<tr style="background:${bg};">
+                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;">${it.name}</td>
+                <td style="padding:8px 10px;border-bottom:1px solid #e5e7eb;white-space:nowrap;">${it.time}</td>
+              </tr>`;
+              started=true;
+            });
+            return out;
+          })()}</tbody>
         </table>`}
+    </div>`;
+  }
+
+  /* ── サブ画面：どちらのトーナメント表を見るか選ぶ ──
+     【8-6】トーナメントが2つある大会のために、表を開く前に1画面はさむ。
+     トーナメント②が「なし」の大会ではこの画面は出ず、今までどおりそのまま表が開く。 */
+  if(v==='bracketPick'){
+    const ptour=tour||activeTour();
+    const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const n1=(ptour&&ptour.bracket1Name)||'決勝トーナメント';
+    const n2=(ptour&&ptour.bracket2Name)||'Bトーナメント';
+    const c1=Number(ptour&&ptour.bracketTeamCount)||64;
+    const c2=Number(ptour&&ptour.bracket2TeamCount)||0;
+    const card=(id,icon,name,count)=>`<button id="${id}" style="width:100%;padding:18px 16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
+        <span style="font-size:28px;">${icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:16px;font-weight:700;color:#111;">${esc(name)}</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:3px;">${count?count+'チーム':''}</div>
+        </div>
+        <span style="font-size:18px;color:#9ca3af;">▸</span>
+      </button>`;
+    return`<div style="padding:16px;max-width:480px;margin:0 auto;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
+        <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
+        <div style="font-size:17px;font-weight:700;color:#111;">🏆 トーナメント表</div>
+      </div>
+      ${S._tiLoading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
+      :`<div style="font-size:13px;color:#6b7280;margin-bottom:14px;">どちらのトーナメント表を見ますか？</div>
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          ${card('btn-ti-bracket-1','🏆',n1,c1)}
+          ${c2?card('btn-ti-bracket-2','🥈',n2,c2):''}
+        </div>`}
     </div>`;
   }
 
@@ -6108,9 +7297,13 @@ function rTournamentInfo(){
     const err=S._tiError;
     const data=S._tiBracket;      // {rounds:[{name,matches:[{team1,team2,win1,win2}]}]}
 
-    // 対象大会の決勝Tチーム数（管理者画面で設定 → _settings.json 経由で配信）
-    const _tourB=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):activeTour();
-    const teamCount=Number(_tourB&&_tourB.bracketTeamCount)||64;
+    /* 【8-6】トーナメントは最大2つ。いまどちらを見ているかは S._tiBracketNo（1 or 2）で決まる。
+       チーム数と表示名は、それぞれ管理者画面で設定したものを使う（_settings.json 経由で配信）。 */
+    const _tourB=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):tiTour();
+    const _bNo=Number(S._tiBracketNo)||1;
+    const _hasB2=Number(_tourB&&_tourB.bracket2TeamCount)>0;
+    const teamCount=(_bNo===2?Number(_tourB&&_tourB.bracket2TeamCount):Number(_tourB&&_tourB.bracketTeamCount))||64;
+    const _bName=_bNo===2?((_tourB&&_tourB.bracket2Name)||'Bトーナメント'):((_tourB&&_tourB.bracket1Name)||'決勝トーナメント');
 
     const rawRounds=(data&&Array.isArray(data.rounds))?data.rounds:[];
     function esc(s){return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
@@ -6280,8 +7473,8 @@ function rTournamentInfo(){
 
     return`<div style="padding:16px;max-width:820px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
-        <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🏆 決勝トーナメント表</div>
+        <button id="${_hasB2?'btn-ti-bracket-back':'btn-ti-sub-back'}" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
+        <div style="font-size:17px;font-weight:700;color:#111;">🏆 ${esc(_bName)}表</div>
       </div>
       ${loading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
       :err?`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`
@@ -6354,24 +7547,25 @@ function rTournamentInfo(){
     // 検索ボックス＋結果表示（チーム名プルダウン／チームNo入力のタブ切替）
     const pMode=S._tiPrelimMode||'select';
     const pModeTab=(mv,l)=>`<button class="ti-prelim-mode-tab" data-mode="${mv}" style="flex:1;padding:9px 4px;font-size:13px;font-weight:700;border:none;border-radius:8px;background:${pMode===mv?'#1D9E75':'#f3f4f6'};color:${pMode===mv?'#fff':'#6b7280'};cursor:pointer;">${l}</button>`;
+    const pW=wTeam();   // シングルス大会なら「選手」、それ以外は「チーム」
     const pTeamsSorted=teams.slice().sort((a,b)=>parseInt(a.teamNo,10)-parseInt(b.teamNo,10));
     const pSelectedNo=sel?String(sel.teamNo):'';
     const pInputBlock=pMode==='select'
       ?(pTeamsSorted.length>0
         ?`<select id="ti-prelim-select" style="width:100%;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px;background:#fff;">
-            <option value="">-- チームを選択 --</option>
+            <option value="">-- ${pW}を選択 --</option>
             ${pTeamsSorted.map(t=>`<option value="${t.teamNo}" ${pSelectedNo===String(t.teamNo)?'selected':''}>No.${t.teamNo}　${t.teamName||''}</option>`).join('')}
           </select>`
-        :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">チームデータがありません</div>`)
+        :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">${pW}データがありません</div>`)
       :`<div style="display:flex;gap:8px;">
-          <input type="text" id="ti-prelim-input" value="${q}" placeholder="チームNo（例: 001）" inputmode="numeric"
+          <input type="text" id="ti-prelim-input" value="${q}" placeholder="${pW}No（例: 001）" inputmode="numeric"
             style="flex:1;padding:10px 12px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px;"/>
           <button id="ti-prelim-search" style="padding:10px 18px;background:#6FD0A4;color:#08341f;border:none;border-radius:10px;font-size:15px;font-weight:700;cursor:pointer;">検索</button>
         </div>`;
     const searchBox=`<div style="margin-bottom:16px;">
       <div style="display:flex;gap:8px;margin-bottom:10px;">
-        ${pModeTab('select','チーム名から選ぶ')}
-        ${pModeTab('no','チームNoで入力')}
+        ${pModeTab('select',pW+'名から選ぶ')}
+        ${pModeTab('no',pW+'Noで入力')}
       </div>
       ${pInputBlock}
     </div>`;
@@ -6426,10 +7620,10 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🪪 チームNoを検索</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">🪪 ${wTeam(tour||null)}Noを検索</div>
       </div>
       <div style="margin-bottom:12px;">
-        <input type="text" id="ts-input" value="${q}" placeholder="チーム名のキーワードを入力"
+        <input type="text" id="ts-input" value="${q}" placeholder="${wTeam(tour||null)}名のキーワードを入力"
           style="width:100%;padding:11px 12px;border:1.5px solid #d1d5db;border-radius:10px;font-size:15px;"/>
       </div>
       <div id="ts-list">${S._tiLoading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`:buildTeamSearchList(q)}</div>
@@ -6495,6 +7689,407 @@ function rTournamentInfo(){
   </div>`;
 }
 
+/* =========================================================================
+   交流戦の参加申請（8-6 / 1-4 で追加）
+
+   これまで交流戦は「負けたら自動的に参加」だったが、
+   今回から「対象の人のうち、出たい人だけが申し込む」形にした。
+
+   流れ
+     ① 対戦表の「モルック管理」→「交流戦の受付を開始する」を押す
+        → GitHub に {大会コード}_exhibition.json（open:true）が置かれる
+     ② アプリのホームに「交流戦 参加申請」ボタンが出る
+        （大会設定で「申請フォームを作る」にしてある大会だけ）
+     ③ 参加者が チーム → 交流戦①/② を選んで「参加を申請する」
+        → 対戦表の「【運営用】交流戦参加確認」シートに「参加」と書き込まれる
+     ④ 受付を終了すると、アプリのボタンは消える
+   ========================================================================= */
+
+// 大会設定の交流戦のところを、抜けがない形に整えて返す
+function exhOf(tour){
+  const e=(tour&&tour.exhibition)||{};
+  const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];
+  let n=parseInt(e.count,10);
+  if(!(n>=0))n=0;
+  if(n>9)n=9;
+  const games=[];
+  for(let i=0;i<n;i++){
+    const g=(e.games&&e.games[i])||{};
+    games.push({name:String(g.name||('交流戦'+NUM[i])),desc:String(g.desc||'')});
+  }
+  return {enabled:e.enabled===true,count:n,games:games};
+}
+
+/* =========================================================================
+   交流戦の「何時から何時か」を、配信済みのタイムスケジュールから拾う
+   （案B／2026-10-05 追加）
+
+   考え方
+     時間を入れる欄をどこかに新しく作るのではなく、
+     すでに配信している {大会コード}_info.json の中の
+     タイムスケジュール（区分／時間）から、名前で探して持ってくる。
+     だから対戦表側の作業は増えない。時間がずれたら、これまでどおり
+     「大会概要（レギュレーション・タイムスケジュール最新版）」の
+     時間セルを直せばよい（直した時点で自動配信される）。
+
+   探し方（ここが大事）
+     「交流戦①」と完全に同じ区分名だけを探すのではなく、
+     区分名の中に「交流戦①」が含まれていれば当たりとする。
+       例）「Bトーナメントのあとに交流戦①」 → 当たり
+     さらに、書き方のゆれも吸収する。
+       ・空白（半角・全角）は無視
+       ・全角の英数字は半角として扱う
+       ・「①」と「1」は同じものとして扱う（交流戦① ＝ 交流戦1）
+       ・英字の大文字・小文字は区別しない
+     時間が空っぽの行（＝見出しの帯）は時間がないので飛ばす。
+     当たりが複数あったら、いちばん上の行（＝早い時間）を使う。
+
+   見つからなかったとき
+     何も出さない（「時間 未定」などとは出さない）。
+     タイムスケジュールにまだ書かれていない、という状態なので、
+     書き足せばそのまま出るようになる。
+   ========================================================================= */
+
+const EXH_SCHED_TTL = 60000;   // 一度読んだら60秒は読み直さない
+const EXH_CIRCLE_   = '①②③④⑤⑥⑦⑧⑨';
+
+// 照合用に、書き方のゆれをならす
+function exhNorm_(s){
+  return String(s==null?'':s)
+    .replace(/[\s　]/g,'')                                   // 空白を消す
+    .replace(/[Ａ-Ｚａ-ｚ０-９]/g,c=>String.fromCharCode(c.charCodeAt(0)-0xFEE0)) // 全角英数→半角
+    .replace(/[①-⑨]/g,c=>String(EXH_CIRCLE_.indexOf(c)+1))       // ①→1
+    .toLowerCase();
+}
+
+/* タイムスケジュールの行から、その交流戦の時間を探して返す。見つからなければ ''。 */
+function exhTimeFromSchedule_(rows,gameName){
+  const key=exhNorm_(gameName);
+  if(!key)return '';
+  const list=rows||[];
+  for(let i=0;i<list.length;i++){
+    const r=list[i];
+    if(!r)continue;
+    if(r.type==='gap'||r.type==='header')continue;   // 区切りと見出しは飛ばす
+    const time=String(r.time==null?'':r.time).trim();
+    if(!time)continue;                               // 時間が無い行は使えない
+    if(exhNorm_(r.name).indexOf(key)>=0)return time; // 含まれていれば当たり
+  }
+  return '';
+}
+
+/* タイムスケジュール（_info.json）を取ってくる。
+
+   読む道は交流戦の受付と同じ2段構え。
+     ① api.github.com … 置いたその瞬間の中身が返る（速い）。1端末1時間60回まで
+     ② raw.githubusercontent.com … 上限なし。ただし数分ふるいことがある
+   この画面は参加者が申し込むときに開くだけで、ずっと見張ってはいないので、
+   ①を使っても回数をほとんど使わない。時間のずれをすぐ反映したいので①を優先する。 */
+let _exhSchedCache_={code:'',at:0,rows:null};
+async function fetchExhSchedule_(code){
+  if(!code)return [];
+  const fc=toJsonFileCode(code);
+  if(_exhSchedCache_.code===fc&&_exhSchedCache_.rows&&(Date.now()-_exhSchedCache_.at)<EXH_SCHED_TTL){
+    return _exhSchedCache_.rows;
+  }
+  const fileName=fc+'_info.json';
+  // ① 速い道
+  try{
+    const res=await fetch(GITHUB_DATA_BASE+'/'+fileName+'?t='+Date.now(),
+      {cache:'no-store',headers:{'Accept':'application/vnd.github.v3+json'}});
+    if(res.ok){
+      const api=await res.json();
+      const b64=String(api.content||'').replace(/\s/g,'');
+      const bin=atob(b64);
+      const bytes=new Uint8Array(bin.length);
+      for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+      const d=JSON.parse(new TextDecoder('utf-8').decode(bytes));
+      const rows=(d&&d.schedule)||[];
+      _exhSchedCache_={code:fc,at:Date.now(),rows:rows};
+      return rows;
+    }
+  }catch(e){}
+  // ② 控えの道
+  try{
+    const res2=await fetch(GITHUB_RAW_BASE+'/'+fileName+'?t='+Date.now(),{cache:'no-store'});
+    if(res2.ok){
+      const d2=await res2.json();
+      const rows2=(d2&&d2.schedule)||[];
+      _exhSchedCache_={code:fc,at:Date.now(),rows:rows2};
+      return rows2;
+    }
+  }catch(e){}
+  return [];
+}
+
+/* 交流戦の画面を開いたときに、1回だけ読みにいく。
+   （60秒以内に読み直すことはしない。通信を増やしすぎないため） */
+let _exhSchedBusy_=false;
+function maybeLoadExhSchedule(code){
+  if(!code||_exhSchedBusy_)return;
+  const fc=toJsonFileCode(code);
+  if(S._exSchedCode===fc&&(Date.now()-(S._exSchedAt||0))<EXH_SCHED_TTL)return;
+  _exhSchedBusy_=true;
+  fetchExhSchedule_(code).then(rows=>{
+    _exhSchedBusy_=false;
+    S._exSched=rows;S._exSchedCode=fc;S._exSchedAt=Date.now();
+    if(S.phase==='exhibition'||S.phase==='setup')render();
+  }).catch(()=>{
+    _exhSchedBusy_=false;S._exSchedCode=fc;S._exSchedAt=Date.now();
+  });
+}
+
+/* いま受付中かどうかを GitHub から確かめる（★2026-10-05 変更：交流戦ごと）
+
+   【どこから読むか】
+     api.github.com から読む。「対戦表を配信」で使っているのと同じ道で、
+     置いた“その瞬間”の中身がそのまま返る＝受付の開始／終了がすぐ伝わる。
+     （1つの回線あたり1時間60回までという上限がある）
+
+   【読めなかったときは「受付していない」とみなす】
+     以前は、読めなかったとき raw.githubusercontent.com に切り替えていた。
+     こちらは上限が実質ないが、途中のキャッシュのせいで
+     数分ふるい内容が返ることがある。そのため
+     「本部が受付を終了したのに、その端末ではボタンが残る」
+     ということが起きていた。
+     終了したはずのボタンが残るほうが事故になるので、
+     確かめられなかったときはボタンを出さない（受付していない扱い）に変えた。
+     そのかわり画面に「確認できませんでした」と出して、
+     黙って消えたように見えないようにしてある。
+     ※念のため、対戦表側（GAS）でも
+       「受付していない交流戦の申し込みは断る」ようにしてあるので、
+       万一ボタンが残っても間違った申し込みは入らない。
+
+   【返す形】
+     { ok:確かめられたか, games:{1:true,2:false,…}, anyOpen:どれか受付中か } */
+async function fetchExhibitionOpen_(code){
+  const fileName=toJsonFileCode(code)+'_exhibition.json';
+  const read=async()=>{
+    const res=await fetch(GITHUB_DATA_BASE+'/'+fileName+'?t='+Date.now(),
+      {cache:'no-store',headers:{'Accept':'application/vnd.github.v3+json'}});
+    // まだ一度も受付を開始していない大会。これは「確かめられた」ので ok:true
+    if(res.status===404)return exhParseOpenJson_(null);
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const api=await res.json();
+    const b64=String(api.content||'').replace(/\s/g,'');
+    const bin=atob(b64);
+    const bytes=new Uint8Array(bin.length);
+    for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+    return exhParseOpenJson_(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+  };
+  try{ return await read(); }
+  catch(e1){
+    await new Promise(r=>setTimeout(r,500));          // 1回だけやり直す
+    try{ return await read(); }
+    catch(e2){ return {ok:false,games:{},anyOpen:false}; }   // ★確かめられなかった
+  }
+}
+
+/* 届いたファイルの中身を「交流戦ごとの受付オン・オフ」に直す。
+     新しい対戦表 … {open:…, games:{"1":true,"2":false}}
+     古い対戦表 …… {open:true} だけ（games が入っていない）
+                   → この場合は、どの交流戦も受付中として扱う（今までと同じ動き） */
+function exhParseOpenJson_(d){
+  const games={};
+  let anyOpen=false;
+  const g=(d&&d.games)||null;
+  if(g&&typeof g==='object'){
+    for(let i=1;i<=9;i++){
+      const on=(g[i]===true||g[String(i)]===true);
+      games[i]=on;
+      if(on)anyOpen=true;
+    }
+  }else{
+    const legacy=!!(d&&d.open===true);
+    for(let i=1;i<=9;i++)games[i]=legacy;
+    anyOpen=legacy;
+  }
+  /* ★2026-10-05 追加：交流戦の時間。
+       新しい対戦表は times を一緒に送ってくるので、アプリは
+       タイムスケジュールのファイルを別に読まなくてよい（通信1回ぶん節約）。
+       古い対戦表は times が無いので、そのときだけ今までどおり自分で読む。 */
+  const times={};
+  const tsrc=(d&&d.times)||null;
+  const hasTimes=!!(tsrc&&typeof tsrc==='object');
+  if(hasTimes){
+    for(let i=1;i<=9;i++){
+      const v=(tsrc[i]!==undefined)?tsrc[i]:tsrc[String(i)];
+      times[i]=String(v==null?'':v).trim();
+    }
+  }
+  return {ok:true,games:games,anyOpen:anyOpen,times:times,hasTimes:hasTimes};
+}
+
+/* その交流戦（0から数えた番号）の時間を返す。
+     新しい対戦表 … 受付オン・オフのファイルに一緒に届いている（通信ゼロ）
+     古い対戦表 …… 届かないので、タイムスケジュールのファイルから自分で探す */
+function exhTimeOf_(i,name){
+  if(S._exhHasTimes===true){
+    // ※ null>=0 は JavaScript では true になってしまうので、数字かどうかから見る
+    if(typeof i!=='number'||!isFinite(i)||i<0)return '';
+    const t=(S._exhTimes||{})[i+1];
+    return String(t==null?'':t).trim();
+  }
+  return exhTimeFromSchedule_(S._exSched,name);
+}
+
+/* その交流戦（0から数えた番号）が、いま受付中かどうか。
+   まだ受付状況を確かめられていないときは false（＝出さない）。 */
+function exhGameIsOpen_(i){
+  const g=S._exhGames;
+  if(!g)return false;
+  return g[i+1]===true;
+}
+
+/* いつ見にいくか（「開催中の大会」の確認と同じ考え方）
+     ・ホーム画面をはじめて開いたとき
+     ・ほかの画面からホームに戻ってきたとき  ← ここが実質いちばん効く
+     ・ホームを開いたままのときは20秒おき（対戦表の取得と同じ間隔）
+   ※通信の回数を増やしすぎないよう、上の条件以外では見にいかない。 */
+let _exhOpenAt=0,_exhOpenCode='',_exhOpenBusy=false,_exhWasAway=false;
+function maybeRefreshExhibitionOpen(code){
+  if(!code)return;
+  if(_exhOpenBusy)return;
+  const first=(_exhOpenCode!==code);
+  const back=_exhWasAway;
+  _exhWasAway=false;
+  if(!first&&!back&&(Date.now()-_exhOpenAt)<CACHE_TTL)return;
+  _exhOpenBusy=true;
+  fetchExhibitionOpen_(code).then(r=>{
+    _exhOpenCode=code;_exhOpenAt=Date.now();_exhOpenBusy=false;
+    // 前回と中身が変わったときだけ描き直す（むだに画面を作り直さない）
+    const before=JSON.stringify([S._exhOpen,S._exhGames||{},S._exhUnknown===true,S._exhTimes||{}]);
+    S._exhOpen=r.anyOpen;S._exhGames=r.games;S._exhUnknown=(r.ok!==true);
+    S._exhTimes=r.times||{};S._exhHasTimes=(r.hasTimes===true);
+    const after=JSON.stringify([S._exhOpen,S._exhGames||{},S._exhUnknown===true,S._exhTimes||{}]);
+    if(before!==after&&(S.phase==='setup'||S.phase==='exhibition'))render();
+  }).catch(()=>{
+    _exhOpenAt=Date.now();_exhOpenBusy=false;
+    S._exhGames={};S._exhOpen=false;S._exhUnknown=true;
+    S._exhTimes={};S._exhHasTimes=false;
+  });
+}
+
+// 申請を対戦表（GAS）へ送る。受付の送信と同じ作り。
+async function submitExhibition(payload){
+  const tour=activeTour()||{};
+  const gasUrl=(tour.gasUrl&&tour.gasUrl.trim())||GAS_URL;
+  if(!gasUrl||!gasUrl.startsWith('https://script.google.com/')){
+    throw new Error('この大会の送信先が設定されていません。本部にお伝えください。');
+  }
+  const body=new URLSearchParams({data:JSON.stringify({
+    type:'exhibition',
+    eventCode:tour.eventCode||'',
+    teamNo:payload.teamNo,
+    teamName:payload.teamName,
+    gameIndex:payload.gameIndex,   // 1始まり（1＝交流戦①）
+    gameName:payload.gameName,
+    at:new Date().toISOString()
+  })});
+  const res=await fetch(gasUrl,{method:'POST',mode:'cors',body});
+  const json=await res.json();
+  if(json.status!=='ok'){
+    /* ★2026-10-05 追加：対戦表側で「その交流戦は受付していない」と
+         断られたとき。アプリの表示がほんの少し古かったということなので、
+         次にこの画面やホームを開いたときに受付状況を取り直させる。 */
+    if(json&&json.closed===true){_exhOpenCode='';_exhOpenAt=0;}
+    throw new Error(json.message||'送信エラー');
+  }
+  return json;
+}
+
+function resetExhibition(){
+  S._exView='team';S._exTeamNo='';S._exTeamName='';S._exGame=null;
+  S._exSubmitting=false;S._exError='';
+}
+
+// ===== 交流戦 参加申請の画面 =====
+function rExhibition(){
+  const tour=activeTour()||{};
+  const ex=exhOf(tour);
+  const v=S._exView||'team';
+  // ★受付が終わっていないかを、この画面でも取り直す（時間もここで一緒に届く）
+  if(ex.count>0)maybeRefreshExhibitionOpen(tour.eventCode);
+  /* 古い対戦表のときだけ、時間をタイムスケジュールから自分で読む */
+  if(ex.count>0&&S._exhHasTimes!==true)maybeLoadExhSchedule(tour.eventCode);
+  const schedReady=(S._exhHasTimes===true)||(S._exSchedCode===toJsonFileCode(tour.eventCode||''));
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const wrap=inner=>`<div style="padding:16px;max-width:480px;margin:0 auto;">${inner}</div>`;
+  const head=(title,backId)=>`<div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+      <button id="${backId}" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;white-space:nowrap;">← 戻る</button>
+      <div style="font-size:17px;font-weight:700;color:#111;">${title}</div>
+    </div>`;
+
+  // ── 送信できました ──
+  if(v==='done'){
+    const g=ex.games[S._exGame]||{name:''};
+    return wrap(`
+      <div style="text-align:center;padding:20px 8px 8px;">
+        <div style="font-size:56px;line-height:1;margin-bottom:12px;">✅</div>
+        <div style="font-size:20px;font-weight:800;color:#0a6e57;margin-bottom:8px;">送信が完了しました</div>
+        <div style="font-size:14px;color:#374151;line-height:1.8;">交流戦の参加申請を受け付けました。<br>当日は本部の案内をお待ちください。</div>
+      </div>
+      <div style="background:#E1F5EE;border-radius:12px;padding:16px;margin:18px 0;">
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;"><span style="color:#6b7280;">チーム</span><span style="font-weight:700;color:#111;">No.${esc(S._exTeamNo)}　${esc(S._exTeamName)}</span></div>
+        <div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-top:1px solid #b7e2d2;"><span style="color:#6b7280;">申し込んだ試合</span><span style="font-weight:700;color:#111;">${esc(g.name)}</span></div>
+        ${exhTimeOf_(S._exGame,g.name)?`<div style="display:flex;justify-content:space-between;padding:6px 0;font-size:14px;border-top:1px solid #b7e2d2;"><span style="color:#6b7280;">時間</span><span style="font-weight:700;color:#111;">${esc(exhTimeOf_(S._exGame,g.name))}</span></div>`:''}
+      </div>
+      ${ex.games.map((gg,ii)=>ii).filter(ii=>exhGameIsOpen_(ii)&&ii!==S._exGame).length
+        ?`<button id="btn-ex-again" style="width:100%;padding:13px;margin-bottom:10px;border:1.5px solid #1D9E75;border-radius:10px;background:#fff;color:#0a6e57;font-size:14px;font-weight:700;cursor:pointer;">ほかの交流戦にも申し込む</button>`
+        :''}
+      <button id="btn-ex-home" style="width:100%;padding:15px;border:none;border-radius:12px;background:#1D9E75;color:#fff;font-size:16px;font-weight:700;cursor:pointer;">ホームに戻る</button>
+    `);
+  }
+
+  // ── どの交流戦に出るかを選ぶ ──
+  if(v==='game'){
+    const sel=S._exGame;
+    /* ★2026-10-05 変更：受付中の交流戦だけを並べる。
+         data-i には「もとの番号」を入れたままにするので、
+         送信するときの番号（交流戦①＝1）はずれない。 */
+    const openList=ex.games.map((g,i)=>({g:g,i:i})).filter(x=>exhGameIsOpen_(x.i));
+    const cards=openList.map(({g,i})=>{
+      const on=sel===i;
+      // ★この交流戦が何時からか（届いていればそれを、無ければ自分で探した結果）
+      const gTime=exhTimeOf_(i,g.name);
+      return`<button class="ex-game" data-i="${i}" style="width:100%;text-align:left;padding:16px;margin-bottom:12px;border:2px solid ${on?'#1D9E75':'#e5e7eb'};border-radius:12px;background:${on?'#E1F5EE':'#fff'};cursor:pointer;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="width:22px;height:22px;border-radius:11px;border:2px solid ${on?'#1D9E75':'#d1d5db'};background:${on?'#1D9E75':'#fff'};flex-shrink:0;display:flex;align-items:center;justify-content:center;color:#fff;font-size:13px;font-weight:900;">${on?'✓':''}</span>
+          <span style="font-size:16px;font-weight:800;color:#111;">${esc(g.name)}</span>
+        </div>
+        ${gTime
+          ?`<div style="font-size:13px;font-weight:700;color:#0a6e57;margin:8px 0 0 32px;">🕐 ${esc(gTime)}</div>`
+          :(schedReady?'':`<div style="font-size:12px;color:#9ca3af;margin:8px 0 0 32px;">🕐 時間を確認中...</div>`)}
+        ${g.desc?`<div style="font-size:13px;color:#4b5563;line-height:1.7;margin:8px 0 0 32px;white-space:pre-wrap;">${esc(g.desc)}</div>`:''}
+      </button>`;
+    }).join('');
+    return wrap(head('交流戦 参加申請','btn-ex-back-team')+`
+      <div style="background:#f9fafb;border-radius:10px;padding:10px 12px;margin-bottom:16px;font-size:13px;color:#374151;">
+        申し込むチーム：<b>No.${esc(S._exTeamNo)}　${esc(S._exTeamName)}</b>
+      </div>
+      <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:10px;">出たい交流戦を選んでください</div>
+      ${cards||`<div style="font-size:13px;color:#9ca3af;padding:12px 0;line-height:1.8;">${ex.games.length?'いま受付中の交流戦はありません。<br>本部の案内をお待ちください。':'交流戦が設定されていません。'}</div>`}
+      ${S._exError?`<div style="padding:12px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;line-height:1.7;margin-bottom:12px;">${esc(S._exError)}</div>`:''}
+      <button id="btn-ex-submit" ${(sel==null||S._exSubmitting)?'disabled':''} style="width:100%;padding:16px;border:none;border-radius:12px;background:${(sel==null||S._exSubmitting)?'#d1d5db':'#1D9E75'};color:#fff;font-size:17px;font-weight:800;cursor:${(sel==null||S._exSubmitting)?'default':'pointer'};">${S._exSubmitting?'送信中...':'参加を申請する'}</button>
+      <div style="font-size:11px;color:#9ca3af;text-align:center;margin-top:10px;line-height:1.7;">送信が対戦表に書き込まれたことを確認してから、完了画面が出ます。<br>両方に出たい場合は、送信後にもう一度申し込めます。</div>
+    `);
+  }
+
+  // ── 自分のチームを選ぶ ──
+  const teams=(tour.teams||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
+  const cur=String(S._exTeamNo||'');
+  return wrap(head('交流戦 参加申請','btn-ex-home2')+`
+    <div style="font-size:13px;color:#6b7280;line-height:1.8;margin-bottom:16px;">交流戦は<b>出たいチームだけ</b>が参加します。<br>まず、申し込むチームを選んでください。</div>
+    ${teams.length
+      ?`<select id="ex-team" style="width:100%;padding:12px;border:1.5px solid #d1d5db;border-radius:10px;font-size:16px;background:#fff;">
+          <option value="">-- チームを選択 --</option>
+          ${teams.map(t=>`<option value="${esc(t.id)}" ${cur===String(t.id)?'selected':''}>No.${esc(t.id)}　${esc(t.name||'')}</option>`).join('')}
+        </select>`
+      :`<div style="font-size:13px;color:#9ca3af;padding:12px 0;">参加チームがまだ登録されていません。</div>`}
+    <button id="btn-ex-next" ${cur?'':'disabled'} style="width:100%;padding:15px;margin-top:16px;border:none;border-radius:12px;background:${cur?'#1D9E75':'#d1d5db'};color:#fff;font-size:16px;font-weight:700;cursor:${cur?'pointer':'default'};">次へ →</button>
+  `);
+}
+
 // ===== 大会受付：レイアウト共通ヘッダ =====
 function rcpHeader(title,backPhase){
   return`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
@@ -6506,13 +8101,22 @@ function rcpHeader(title,backPhase){
 function rcpChoice(name,value,selected,label,color){
   const on=selected===value;
   const c=color||'#1D9E75';
-  return`<button class="rcp-choice" data-name="${name}" data-value="${value}" style="width:100%;padding:18px 16px;margin-bottom:12px;border:2px solid ${on?c:'#e5e7eb'};border-radius:12px;background:${on?(c==='#1D9E75'?'#E1F5EE':'#FEF3F2'):'#fff'};color:#111;font-size:16px;font-weight:700;cursor:pointer;text-align:center;">${label}</button>`;
+  /* 選ばれたときの「中の色」は、ふちの色に合った薄い色にする。
+     以前は「#1D9E75 以外はすべて赤系」という判定だったため、
+     緑の #2E8B57（「いない」「希望しない」）に赤系の背景が付いてしまい、
+     ふちは緑・中はオレンジという色の反転が起きていた。 */
+  const fill={'#1D9E75':'#E1F5EE','#2E8B57':'#E8F4EC','#E24B4A':'#FEF3F2'}[c]||'#F3F4F6';
+  return`<button class="rcp-choice" data-name="${name}" data-value="${value}" style="width:100%;padding:18px 16px;margin-bottom:12px;border:2px solid ${on?c:'#e5e7eb'};border-radius:12px;background:${on?fill:'#fff'};color:#111;font-size:16px;font-weight:700;cursor:pointer;text-align:center;">${label}</button>`;
 }
 function rcpNextBtn(disabled){
   return`<button class="btn btn-green" id="btn-rcp-next" ${disabled?'disabled':''} style="width:100%;padding:15px;font-size:16px;font-weight:700;margin-top:8px;">次へ →</button>`;
 }
 function rcpProgress(step){
-  const total=4;
+  /* シングルスは❶集合・❷メンバー変更が無いので、全2問として表示する。
+     （❸参加経験が1問目、❹棒貸出が2問目） */
+  const _sgl=isSinglesActive();
+  const total=_sgl?2:4;
+  if(_sgl)step=Math.max(0,step-2);
   let dots='';
   for(let i=1;i<=total;i++){
     dots+=`<div style="flex:1;height:5px;border-radius:3px;background:${i<=step?'#3FBF8F':'#e5e7eb'};"></div>`;
@@ -6525,28 +8129,36 @@ function rReception(){
   const st=_rcpState;
   const tour=activeTour()||{teams:[],eventName:''};
   const teams=tour.teams||[];
+  /* シングルス大会は「チーム」ではなく「選手」と呼ぶ。
+     チーム名の欄＝モルックネーム、メンバー①＝本名フルネーム なので、
+     一覧では「モルックネーム（本名）」の形で出して本人が選びやすくする。 */
+  const _sgl=isSinglesTour(tour);
+  const _W=_sgl?'選手':'チーム';
+  /* 名前の出し方は「No.○○　選手名（モルックネーム）」だけにする。
+     以前はシングルスのとき本名を括弧で添えていたが、
+     ほかの選手を選ぶ画面とそろえるため、本名は出さないことにした。 */
   const teamOpts=teams.map(t=>`<option value="${t.id}" ${String(st.selectedTeamId)===String(t.id)?'selected':''}>No.${t.id}　${t.name}</option>`).join('');
 
   const modeTab=(v,l)=>`<button class="rcp-mode-tab" data-mode="${v}" style="flex:1;padding:10px 4px;font-size:14px;font-weight:700;border:none;border-radius:8px;background:${st.mode===v?'#1D9E75':'#f3f4f6'};color:${st.mode===v?'#fff':'#6b7280'};cursor:pointer;">${l}</button>`;
 
   const selectBlock=st.mode==='select'
     ?`<div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">チーム名を選択</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">${_sgl?'モルックネームを選択':'チーム名を選択'}</div>
         ${teams.length>0
           ?`<select id="rcp-team-select" style="font-size:16px;">
-              <option value="">-- チームを選択 --</option>${teamOpts}
+              <option value="">-- ${_W}を選択 --</option>${teamOpts}
             </select>`
-          :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">参加チームが登録されていません</div>`}
+          :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">参加${_W}が登録されていません</div>`}
       </div>`
     :(()=>{
         const matched=teams.find(t=>String(t.id)===st.teamNo||String(parseInt(t.id,10))===String(parseInt(st.teamNo,10)));
         const preview=st.teamNo
           ?(matched
             ?`<div style="margin-top:8px;padding:10px 12px;background:#E1F5EE;border-radius:8px;font-size:15px;font-weight:700;color:#085041;">✓ ${matched.name}</div>`
-            :`<div style="margin-top:8px;padding:10px 12px;background:#FCEBEB;border-radius:8px;font-size:13px;color:#b91c1c;">該当するチームが見つかりません</div>`)
+            :`<div style="margin-top:8px;padding:10px 12px;background:#FCEBEB;border-radius:8px;font-size:13px;color:#b91c1c;">該当する${_W}が見つかりません</div>`)
           :'';
         return`<div>
-          <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">チームNo</div>
+          <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">${_W}No</div>
           <input type="text" id="rcp-team-no" value="${st.teamNo}" placeholder="例: 073" inputmode="numeric" style="font-size:18px;letter-spacing:2px;text-align:center;"/>
           <div id="rcp-team-no-preview">${preview}</div>
         </div>`;
@@ -6554,11 +8166,11 @@ function rReception(){
 
   return`<div style="padding:8px 0 4px;">
     ${rcpHeader('大会受付','setup')}
-    <div style="font-size:13px;color:#6b7280;margin-bottom:16px;">${tour.eventName||'大会'}の受付を行います。<br>まずはチームを選択してください。</div>
+    <div style="font-size:13px;color:#6b7280;margin-bottom:16px;">${tour.eventName||'大会'}の受付を行います。<br>まずは${_sgl?'ご自分の名前':'チーム'}を選択してください。</div>
     <div class="card" style="padding:16px;margin-bottom:12px;">
       <div style="display:flex;gap:8px;margin-bottom:14px;">
-        ${modeTab('select','チーム名から選ぶ')}
-        ${modeTab('search','チームNoで入力')}
+        ${modeTab('select',_sgl?'名前から選ぶ':'チーム名から選ぶ')}
+        ${modeTab('search',_W+'Noで入力')}
       </div>
       ${selectBlock}
       ${st.loginError?`<div style="font-size:13px;color:#b91c1c;margin-top:10px;">${st.loginError}</div>`:''}
@@ -6595,7 +8207,7 @@ function rRcpQ1(){
   return`<div style="padding:8px 0 4px;">
     ${rcpHeader('大会受付','reception')}
     ${rcpProgress(1)}
-    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:20px;">❶ 開会式までに会場に、自分を含めてチームメンバーが最低2人は到着する見込みですか？</div>
+    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:20px;">${isSinglesActive()?'❶ 開会式までに会場に到着する見込みですか？':'❶ 開会式までに会場に、自分を含めてチームメンバーが最低2人は到着する見込みですか？'}</div>
     ${rcpChoice('q1','arrive',st.q1,'到着する','#1D9E75')}
     ${rcpChoice('q1','late',st.q1,'遅れる可能性がある','#E24B4A')}
     ${rcpNextBtn(!st.q1)}
@@ -6609,11 +8221,11 @@ function rRcpQ2(){
   const members=t&&t.members?String(t.members).split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
   const memberHtml=members.length>0
     ?members.map(m=>`<div style="font-size:14px;color:#111;padding:4px 0;border-bottom:1px solid #f3f4f6;">・${m}</div>`).join('')
-    :`<div style="font-size:13px;color:#9ca3af;">メンバー未登録</div>`;
+    :`<div style="font-size:13px;color:#9ca3af;">${isSinglesActive()?'本名が未登録です':'メンバー未登録'}</div>`;
   return`<div style="padding:8px 0 4px;">
     ${rcpHeader('大会受付','rcpQ1')}
     ${rcpProgress(2)}
-    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:14px;">❷ 以下のチームメンバーから、メンバー変更はありませんか？</div>
+    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:14px;">${isSinglesActive()?'❷ 以下の登録内容（モルックネーム・本名）に間違いはありませんか？':'❷ 以下のチームメンバーから、メンバー変更はありませんか？'}</div>
     <div class="card" style="padding:14px;margin-bottom:18px;">
       <div style="font-size:15px;font-weight:700;color:#1D9E75;margin-bottom:8px;">${t?t.name:'チーム'}<span style="font-size:12px;color:#9ca3af;font-weight:400;margin-left:6px;">No.${t?t.id:'-'}</span></div>
       ${memberHtml}
@@ -6628,11 +8240,11 @@ function rRcpQ2(){
 function rRcpQ3(){
   const st=_rcpState;
   return`<div style="padding:8px 0 4px;">
-    ${rcpHeader('大会受付','rcpQ2')}
+    ${rcpHeader('大会受付',isSinglesActive()?'reception':'rcpQ2')}
     ${rcpProgress(3)}
-    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:20px;">❸ 本大会に参加したことがあるメンバーが、チームに1人はいますか？</div>
-    ${rcpChoice('q3','yes',st.q3,'いる','#1D9E75')}
-    ${rcpChoice('q3','no',st.q3,'いない','#2E8B57')}
+    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:20px;">${isSinglesActive()?'❸ 本大会に参加したことがありますか？':'❸ 本大会に参加したことがあるメンバーが、チームに1人はいますか？'}</div>
+    ${rcpChoice('q3','yes',st.q3,isSinglesActive()?'ある':'いる','#1D9E75')}
+    ${rcpChoice('q3','no',st.q3,isSinglesActive()?'ない':'いない','#2E8B57')}
     ${rcpNextBtn(!st.q3)}
   </div>`;
 }
@@ -6657,7 +8269,7 @@ function rRcpRental(){
     <div style="font-size:17px;font-weight:700;color:#111;margin-bottom:16px;">以下の注意事項をお読みください</div>
     <div class="card" style="padding:16px;margin-bottom:20px;background:#FFF7ED;border-color:#fed7aa;">
       <div style="font-size:15px;color:#92400e;line-height:1.7;">
-        ・モルック棒の貸し出しは1チームにつき1本となります。<br>
+        ・モルック棒の貸し出しは${isSinglesActive()?'1人':'1チーム'}につき1本となります。<br>
         ・大会終了後に必ず返却をしてください。
       </div>
     </div>
@@ -6674,7 +8286,7 @@ function rRcpFinal(){
     <div style="font-size:17px;font-weight:700;color:#111;margin-bottom:16px;">最後にご確認ください</div>
     <div class="card" style="padding:16px;margin-bottom:18px;">
       <div style="font-size:15px;color:#111;line-height:1.7;">
-        ・受付終了後のチームから、コート内で自由に練習が可能です。<br>
+        ・受付終了後の${isSinglesActive()?'方':'チーム'}から、コート内で自由に練習が可能です。<br>
         ・参加賞の缶バッチは、本部にて参加人数分受取が可能です。
       </div>
     </div>
@@ -6693,7 +8305,7 @@ function rRcpDone(){
   const st=_rcpState;
   // 本部での詳細確認が必要か：送信成功時のresultStatusを優先（スキップ時はq1-q4がnullのため）
   const needsDesk=st.resultStatus?(st.resultStatus==='desk'):((st.q1==='late')||(st.q2==='changed')||(st.q3==='no')||(st.q4==='want'));
-  const alreadyNote=st.alreadyDone?`<div style="font-size:13px;color:#0a6e57;background:#E1F5EE;border-radius:8px;padding:8px 12px;margin:0 auto 4px;max-width:340px;">このチームは既に受付が完了しています。</div>`:'';
+  const alreadyNote=st.alreadyDone?`<div style="font-size:13px;color:#0a6e57;background:#E1F5EE;border-radius:8px;padding:8px 12px;margin:0 auto 4px;max-width:340px;">${isSinglesActive()?'この選手は':'このチームは'}既に受付が完了しています。</div>`:'';
   if(needsDesk){
     return`<div style="padding:8px 0 4px;">
       <div style="text-align:center;padding:40px 16px;">
@@ -6799,7 +8411,11 @@ function renderCourtMapBlock(layout,highlightNo,matchId){
 function rCourtSearch(){
   const q=S._courtSearchQuery||{teamNo:'',matchCode:''};
   const results=S._courtSearchResults||null;
-  const tourSrc=activeTour()||{teams:[],matchRules:[]};
+  // 【8-7】大会カードの「対戦相手を検索」から開いたときは、そのカードの大会を見る
+  const _csT=csTour();
+  const tourSrc=_csT||{teams:[],matchRules:[]};
+  // その大会がいま開催中か。開催前の大会では、ここから試合を始められないようにする
+  const _csLive=isLiveEventCode(S._csEventCode)||!S._csEventCode;
 
   // データ同期中はローディング表示（先に画面遷移して裏で通信するため）
   if(S._csLoading){
@@ -6849,7 +8465,8 @@ function rCourtSearch(){
               <div style="font-size:11px;color:#9ca3af;">No.${r.teamB}</div>
             </div>
           </div>
-          <button class="btn btn-green cs-start-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;">この試合を開始する →</button>
+          ${_csLive?`<button class="btn btn-green cs-start-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;">この試合を開始する →</button>`
+            :`<div style="text-align:center;padding:9px;background:#f3f4f6;border-radius:8px;font-size:12px;color:#6b7280;">この大会はまだ始まっていません</div>`}
           ${renderCourtMapBlock(tourSrc.courtLayout,courtNo,r.matchId)}
         </div>`;
       }).join('');
@@ -6863,25 +8480,26 @@ function rCourtSearch(){
   // 検索フォーム本体（チーム名プルダウン／チームNo入力のタブ切替）
   const csMode=S._csMode||'select';
   const csModeTab=(v,l)=>`<button class="cs-mode-tab" data-mode="${v}" style="flex:1;padding:9px 4px;font-size:13px;font-weight:700;border:none;border-radius:8px;background:${csMode===v?'#1D9E75':'#f3f4f6'};color:${csMode===v?'#fff':'#6b7280'};cursor:pointer;">${l}</button>`;
+  const csW=wTeam(_csT||null);   // シングルス大会なら「選手」、それ以外は「チーム」
   const csTeamsSorted=(tourSrc.teams||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
   const csTeamBlock=csMode==='select'
     ?`<div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">チーム名を選択</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">${csW}名を選択</div>
         ${csTeamsSorted.length>0
           ?`<select id="cs-team-select" style="font-size:16px;">
-              <option value="">-- チームを選択 --</option>
+              <option value="">-- ${csW}を選択 --</option>
               ${csTeamsSorted.map(t=>`<option value="${t.id}" ${String(q.teamNo)===String(t.id)?'selected':''}>No.${t.id}　${t.name}</option>`).join('')}
             </select>`
-          :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">参加チームが登録されていません</div>`}
+          :`<div style="font-size:13px;color:#9ca3af;padding:8px 0;">参加${csW}が登録されていません</div>`}
       </div>`
     :`<div>
-        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">チームNo</div>
+        <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">${csW}No</div>
         <input type="text" id="cs-team-no" value="${q.teamNo}" placeholder="例: 073" style="font-size:18px;letter-spacing:2px;text-align:center;"/>
       </div>`;
   const searchForm=`<div class="card" style="padding:14px;margin-bottom:12px;">
       <div style="display:flex;gap:8px;margin-bottom:12px;">
-        ${csModeTab('select','チーム名から選ぶ')}
-        ${csModeTab('no','チームNoで入力')}
+        ${csModeTab('select',csW+'名から選ぶ')}
+        ${csModeTab('no',csW+'Noで入力')}
       </div>
       <div style="display:grid;gap:10px;">
         ${csTeamBlock}
@@ -6902,16 +8520,17 @@ function rCourtSearch(){
           <button class="btn btn-gray btn-sm" id="btn-cs-toggle" style="width:100%;margin-bottom:8px;font-size:13px;">▲ 検索を閉じる</button>
           ${searchForm}
         </div>`
-      :`<button class="btn btn-gray btn-sm" id="btn-cs-toggle" style="width:100%;margin-bottom:12px;font-size:13px;padding:9px;">🔍 他のチーム・試合区分を検索</button>`)
+      :`<button class="btn btn-gray btn-sm" id="btn-cs-toggle" style="width:100%;margin-bottom:12px;font-size:13px;padding:9px;">🔍 他の${csW}・試合区分を検索</button>`)
     :searchForm;
 
-  const headerTitle=personalized?'対戦コートを見る':'対戦コートを検索';
+  const headerTitle=_csLive?(personalized?'対戦コートを見る':'対戦コートを検索'):'対戦相手を検索';
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-court-search">← 戻る</button>
       <div style="font-size:18px;font-weight:700;color:#111;">${headerTitle}</div>
     </div>
-    ${(()=>{const atour=activeTour();if(!atour)return'';const cache=_jsonCache[atour.eventCode];const upd=cache&&cache.data&&cache.data.updatedAt?new Date(cache.data.updatedAt).toLocaleTimeString('ja-JP'):'未取得';return`<div style="font-size:12px;color:#9ca3af;margin-bottom:10px;text-align:right;">最終更新: ${upd} <button class="btn btn-gray btn-xs" id="btn-cs-refresh" style="padding:3px 8px;font-size:11px;">🔄 更新</button></div>`;})()} 
+    ${!_csLive?`<div style="background:#EAF2FB;border:1.5px solid #7FB3E8;border-radius:10px;padding:9px 12px;margin-bottom:10px;font-size:12px;color:#24507d;line-height:1.6;">🗓 <b>${escSc_(tourSrc.eventName||'開催前の大会')}</b>（まだ始まっていません）の対戦を表示しています。</div>`:''}
+    ${(()=>{const atour=_csT;if(!atour)return'';const cache=_jsonCache[atour.eventCode];const upd=cache&&cache.data&&cache.data.updatedAt?new Date(cache.data.updatedAt).toLocaleTimeString('ja-JP'):'未取得';return`<div style="font-size:12px;color:#9ca3af;margin-bottom:10px;text-align:right;">最終更新: ${upd} <button class="btn btn-gray btn-xs" id="btn-cs-refresh" style="padding:3px 8px;font-size:11px;">🔄 更新</button></div>`;})()} 
     ${formBlock}
     ${results!==null?`<div style="font-size:13px;color:#6b7280;margin-bottom:8px;">${results.length}件見つかりました</div>`:''}
     ${resultHtml}
@@ -7225,7 +8844,7 @@ function rMatchConfirm(){
           <span style="font-size:13px;font-weight:700;color:#111;flex:1;">${team?team.name:'未設定'}</span>
         </div>
         ${team&&team.id?`<div style="font-size:11px;color:#9ca3af;margin-bottom:4px;">No.${team.id}</div>`:''}
-        ${members.length>0?members.map(m=>`<div style="font-size:12px;color:#374151;padding:1px 0;">・${m}</div>`).join(''):`<div style="font-size:12px;color:#9ca3af;">メンバー未登録</div>`}
+        ${members.length>0?members.map(m=>`<div style="font-size:12px;color:#374151;padding:1px 0;">・${m}</div>`).join(''):`<div style="font-size:12px;color:#9ca3af;">${isSinglesActive()?'選手名未登録':'メンバー未登録'}</div>`}
       </div>
       ${gi===0?`<div style="text-align:center;padding-top:20px;font-size:20px;font-weight:700;color:#9ca3af;">VS</div>`:''}
       `).join('')}
@@ -7725,6 +9344,8 @@ function bind(){
   const vesel=document.getElementById('view-event-select');
   if(vesel)vesel.onchange=async()=>{
     _viewState.eventCode=vesel.value;
+    // シングルス大会にはチームのタブが無いので、選手のタブへ移しておく
+    if(isSinglesEventCode(_viewState.eventCode)&&_viewState.tab==='team')_viewState.tab='person';
     _viewState.selectedTeam=null;_viewState.selectedPerson=null;
     // 大会変更時はキャッシュをクリア
     _viewState.teams=[];_viewState.persons=[];_viewState.eventStat=null;_viewState.cumulData=null;
@@ -8129,6 +9750,57 @@ function bind(){
     bsl.disabled=false;bsl.textContent=orig;
   };
 
+  /* 【1-5・8-7にそろえた】「次の大会にする」ボタン。
+     開催中の大会はそのままに、日曜の大会などを「開催前の大会」として参加者へ伝える。
+     参加者のホームに「🗓 開催前の大会」のカードが出て、会場や対戦相手を先に見られる。
+     書き込み先は新アプリ用の Supabase（upcoming_events）。従来アプリ（active.json）には影響しない。
+     配信キーは「📡 新アプリの開催中リスト」と同じもの。 */
+  const _upKey=()=>{
+    const inp=document.getElementById('admin-sb-key');
+    const v=((inp&&inp.value)||'').trim();
+    if(v&&v!==AD.sbSyncKey){AD.sbSyncKey=v;saveAdmin(AD);}
+    return String(AD.sbSyncKey||'').trim();
+  };
+  const _upFail=r=>alert(r.reason==='badkey'?'❌ 配信キーが違います。':'❌ 設定に失敗しました。通信状態を確認して、もう一度お試しください。');
+  const _upDone=keys=>{
+    AD.upcomingKeys=keys;saveAdmin(AD);
+    S._upcomingRaw=undefined;S._upcomingEvents=undefined;_liveEvtTs=0;render();
+  };
+  document.querySelectorAll('.admin-set-upcoming').forEach(btn=>{
+    btn.addEventListener('click',async()=>{
+      const k=String(btn.dataset.key||''),code=String(btn.dataset.code||'');
+      if(!k||!code){alert('大会コードが設定されていません');return;}
+      if((S._liveEvents||[]).some(r=>String(r.event_key)===k)){
+        alert('この大会はいま新アプリで開催中です。\n「次の大会」は、まだ始まっていない別の大会を選んでください。');
+        return;
+      }
+      if(!_upKey()){alert('配信キーが入っていません。\n下の「📡 新アプリの開催中リスト」の欄に配信キーを入れてから、もう一度押してください。');return;}
+      const tour=AD.tournaments&&AD.tournaments.find(t=>((t.venueCode?t.venueCode+'_':'')+t.eventCode)===k);
+      if(!confirm(`大会コード「${code}」を「開催前の大会」にしますか？\n参加者のホームにカードが出て、会場・対戦相手を先に見られるようになります。\n（受付と試合開始は、開催中にするまでできません）\n（新アプリだけの設定です。従来アプリには影響しません）`))return;
+      const orig=btn.textContent;btn.disabled=true;btn.textContent='送信中...';
+      let settingsOk=true;
+      if(tour)settingsOk=await publishSettings(tour,{silent:true});
+      const keys=upcomingKeysNow_(AD).filter(x=>x!==k).concat([k]);
+      const r=await publishUpcomingEvents(keys);
+      btn.disabled=false;btn.textContent=orig;
+      if(r.ok){
+        _upDone(keys);
+        alert(settingsOk?'✅ 開催前の大会に設定しました':'⚠️ 設定はできましたが、大会設定の配信に失敗しました。\n大会編集画面の「設定を配信する」をお試しください。');
+      }else _upFail(r);
+    });
+  });
+  document.querySelectorAll('.admin-clear-upcoming').forEach(btn=>{
+    btn.addEventListener('click',async()=>{
+      const k=String(btn.dataset.key||'');
+      if(!confirm('「開催前の大会」の表示をやめますか？\n参加者のホームからカードが消えます。'))return;
+      if(!_upKey()){alert('配信キーが入っていません。\n下の「📡 新アプリの開催中リスト」の欄に配信キーを入れてから、もう一度押してください。');return;}
+      const keys=upcomingKeysNow_(AD).filter(x=>x!==k);
+      const r=await publishUpcomingEvents(keys);
+      if(r.ok){_upDone(keys);alert('✅ 解除しました');}
+      else _upFail(r);
+    });
+  });
+
   // 配信中にするボタン
   document.querySelectorAll('.admin-set-active').forEach(btn=>{
     btn.addEventListener('click',async()=>{
@@ -8228,6 +9900,29 @@ function bind(){
     const peEl=document.getElementById('te-period-end');if(peEl)tour.eventPeriodEnd=peEl.value;
     const rpwEl=document.getElementById('te-reception-pw');if(rpwEl)tour.receptionPw=rpwEl.value.trim();
     const btcEl=document.getElementById('te-bracket-count');if(btcEl)tour.bracketTeamCount=Number(btcEl.value)||64;
+    const mtEl=document.getElementById('te-match-type');if(mtEl)tour.matchType=(mtEl.value==='singles'?'singles':'team');
+    // 交流戦の参加申請
+    const exEn=document.getElementById('te-exh-enabled');
+    const exCn=document.getElementById('te-exh-count');
+    if(exEn||exCn){
+      const cur=exhOf(tour);
+      const n=exCn?(parseInt(exCn.value,10)||0):cur.count;
+      const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];
+      const games=[];
+      for(let i=0;i<n;i++){
+        const nm=document.querySelector('.te-exh-name[data-i="'+i+'"]');
+        const ds=document.querySelector('.te-exh-desc[data-i="'+i+'"]');
+        const old=cur.games[i]||{};
+        games.push({
+          name:(nm?nm.value.trim():(old.name||''))||('交流戦'+NUM[i]),
+          desc:(ds?ds.value.replace(/\s+$/,''):(old.desc||''))
+        });
+      }
+      tour.exhibition={enabled:exEn?(exEn.value==='1'):cur.enabled,count:n,games:games};
+    }
+    const b1nEl=document.getElementById('te-bracket1-name');if(b1nEl)tour.bracket1Name=b1nEl.value.trim()||'決勝トーナメント';
+    const b2cEl=document.getElementById('te-bracket2-count');if(b2cEl)tour.bracket2TeamCount=Number(b2cEl.value)||0;
+    const b2nEl=document.getElementById('te-bracket2-name');if(b2nEl)tour.bracket2Name=b2nEl.value.trim()||'Bトーナメント';
     // コート図
     const clGrid=document.getElementById('cl-grid');
     if(clGrid){
@@ -8253,13 +9948,33 @@ function bind(){
     }
   }
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
-  ['te-venue','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-bracket-count','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
+  ['te-venue','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener('change',()=>{
       const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
       captureBasicFields(tour);saveActiveTour(tour);
     });
   });
+  // 交流戦：試合数を変えたら入力欄の数を作り直す
+  // 試合形式（チーム戦／シングルス）を変えたら、説明文などを描き直す
+  const mtSel=document.getElementById('te-match-type');
+  if(mtSel)mtSel.addEventListener('change',()=>{
+    const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+    captureBasicFields(tour);saveActiveTour(tour);render();
+  });
+  const exCntEl=document.getElementById('te-exh-count');
+  if(exCntEl)exCntEl.addEventListener('change',()=>{
+    const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+    captureBasicFields(tour);saveActiveTour(tour);render();
+  });
+  // 交流戦：名前・説明の入力を保存
+  document.querySelectorAll('.te-exh-name,.te-exh-desc').forEach(el=>{
+    el.addEventListener('change',()=>{
+      const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+      captureBasicFields(tour);saveActiveTour(tour);
+    });
+  });
+
   // コート図プレビューをキー入力ごとにリアルタイム更新（フォーカスを失わないよう全体renderはしない）
   function updateCourtMapPreview(){
     const clGrid=document.getElementById('cl-grid');
@@ -8288,15 +10003,18 @@ function bind(){
   function scNormalize(ch){return(ch&&((ch.columns&&ch.columns.length)||(ch.prelims&&ch.prelims.length)||ch.cornerLabel))?ch:null;}
   // 矢印（負け）クリックで表示/非表示を切替
   function bindScArrows(){
-    document.querySelectorAll('#sc-preview .sc-arrow').forEach(el=>{
+    // 【8-8】矢印をタップして消したときに、保存して描き直すためのつなぎ
+    window.SC_AFTER_ARROW_EDIT=()=>{
+      const _t=ruleEditTarget();if(!_t)return;
+      _t.save();renderAdminScPreview();
+    };
+    // 【8-6】プレビューの「箱」をタップすると、負けたチームの行き先を選べる
+    document.querySelectorAll('#sc-preview .sc-box').forEach(el=>{
       el.onclick=()=>{
         const _t=ruleEditTarget();if(!_t||!_t.obj||!_t.obj.systemChart)return;
-        const ch=_t.obj.systemChart;ch.loseArrows=ch.loseArrows||{};
-        const key=el.dataset.k;const auto=el.dataset.auto==='1';
-        const cur=(ch.loseArrows[key]!==undefined)?ch.loseArrows[key]:auto;
-        const next=!cur;
-        if(next===auto)delete ch.loseArrows[key];else ch.loseArrows[key]=next;
-        _t.save();renderAdminScPreview();
+        showScArrowMenu(_t.obj.systemChart,parseInt(el.dataset.c,10),parseInt(el.dataset.r,10),()=>{
+          _t.save();renderAdminScPreview();
+        });
       };
     });
   }
@@ -8305,6 +10023,7 @@ function bind(){
     const pv=document.getElementById('sc-preview');if(!pv)return;
     const _t=ruleEditTarget();const ch=_t&&_t.obj?_t.obj.systemChart:null;
     pv.innerHTML=renderSystemChart(ch,true);
+    scPaintAll();
     bindScArrows();
   }
   // 入力中のライブプレビュー（構成テキスト＋既存の色・矢印をマージ／クリック不可）
@@ -8315,6 +10034,7 @@ function bind(){
     const _t=ruleEditTarget();
     const merged=scApplyStructureText(_t&&_t.obj?_t.obj.systemChart:null,ta.value);
     pv.innerHTML=renderSystemChart(scNormalize(merged),false);
+    scPaintAll();
   }
   const scEdit=document.getElementById('sc-edit');
   if(scEdit){
@@ -8346,6 +10066,8 @@ function bind(){
   });
   // 初回：編集用プレビューにクリックを有効化
   if(document.getElementById('sc-preview'))bindScArrows();
+  const scTpl=document.getElementById('btn-sc-tpl');
+  if(scTpl)scTpl.onclick=()=>showSystemChartTemplateModal();
   const scAuto=document.getElementById('btn-sc-autogen');
   if(scAuto)scAuto.onclick=()=>{
     const _t=ruleEditTarget();if(!_t||!_t.obj)return;
@@ -8563,7 +10285,7 @@ function bind(){
       const sel=document.getElementById('rcp-team-select');
       const id=sel?sel.value:'';
       _rcpState.selectedTeamId=id||null;
-      if(!id){_rcpState.loginError='チームを選択してください。';render();return;}
+      if(!id){_rcpState.loginError=(isSinglesActive()?'選手':'チーム')+'を選択してください。';render();return;}
       team=teams.find(t=>String(t.id)===String(id));
     } else {
       const tn=(document.getElementById('rcp-team-no')||{value:''}).value.trim();
@@ -8608,8 +10330,8 @@ function bind(){
       S.phase='setup';render();
       return;
     }
-    // 未受付：1人目として質問へ
-    S.phase='rcpQ1';render();
+    // 未受付：1人目として質問へ（シングルスは❶集合・❷メンバー変更が無いので❸から）
+    S.phase=isSinglesActive()?'rcpQ3':'rcpQ1';render();
   };
   // 質問画面：選択肢
   document.querySelectorAll('.rcp-choice').forEach(el=>el.addEventListener('click',()=>{
@@ -8656,6 +10378,75 @@ function bind(){
       render();
     }
   };
+  // ===== 交流戦 参加申請 =====
+  /* ★2026-10-05 変更：ボタンが交流戦ごとに複数並ぶようになったので、
+       「どの交流戦のボタンを押したか（data-i）」を受け取って、
+       その交流戦を最初から選んだ状態で画面を開く。 */
+  document.querySelectorAll('.btn-go-exhibition').forEach(bgex=>{
+    bgex.onclick=async()=>{
+      const pick=parseInt(bgex.dataset.i,10);
+      const code=await resolveActiveEventCode();
+      if(!code){alert('現在、開催中の大会はありません。');return;}
+      await syncAllFromGitHub(code);
+      const t=(AD.tournaments||[]).find(x=>x.eventCode===code);
+      if(t){AD.activeTourId=t.id;saveAdmin(AD);}
+      resetExhibition();
+      if(pick>=0)S._exGame=pick;                 // 押した交流戦を選んでおく
+      // 受付済みなら自分のチームを最初から選んでおく
+      const my=getValidMyTeam(code);
+      if(my&&my.teamId){
+        const tm=((t&&t.teams)||[]).find(x=>String(x.id)===String(my.teamId));
+        if(tm){
+          S._exTeamNo=String(tm.id);S._exTeamName=tm.name||'';
+          S._exView='game';                      // チームが分かっているなら選択画面へ進む
+        }
+      }
+      S.phase='exhibition';render();
+    };
+  });
+  const exSel=document.getElementById('ex-team');
+  if(exSel)exSel.addEventListener('change',()=>{
+    const v=exSel.value;
+    S._exTeamNo=v;
+    const t=activeTour()||{};
+    const tm=(t.teams||[]).find(x=>String(x.id)===String(v));
+    S._exTeamName=tm?(tm.name||''):'';
+    render();
+  });
+  const bexn=document.getElementById('btn-ex-next');
+  if(bexn)bexn.onclick=()=>{if(!S._exTeamNo)return;S._exView='game';S._exError='';render();};
+  const bexbt=document.getElementById('btn-ex-back-team');
+  if(bexbt)bexbt.onclick=()=>{S._exView='team';S._exError='';render();};
+  const bexh2=document.getElementById('btn-ex-home2');
+  if(bexh2)bexh2.onclick=()=>{resetExhibition();S.phase='setup';render();};
+  document.querySelectorAll('.ex-game').forEach(el=>{
+    el.onclick=()=>{S._exGame=parseInt(el.dataset.i,10);S._exError='';render();};
+  });
+  const bexs=document.getElementById('btn-ex-submit');
+  if(bexs)bexs.onclick=async()=>{
+    if(S._exGame==null||S._exSubmitting)return;
+    const tour=activeTour()||{};
+    const g=exhOf(tour).games[S._exGame];
+    if(!g)return;
+    S._exSubmitting=true;S._exError='';render();
+    try{
+      // 対戦表への書き込みが終わってから完了画面を出す（試合結果の送信と同じ作り）
+      await submitExhibition({
+        teamNo:S._exTeamNo,teamName:S._exTeamName,
+        gameIndex:S._exGame+1,gameName:g.name
+      });
+      S._exSubmitting=false;S._exView='done';render();
+    }catch(e){
+      S._exSubmitting=false;
+      S._exError=(e&&e.message)?e.message:'送信に失敗しました。通信環境を確認して、もう一度お試しください。';
+      render();
+    }
+  };
+  const bexa=document.getElementById('btn-ex-again');
+  if(bexa)bexa.onclick=()=>{S._exGame=null;S._exError='';S._exView='game';render();};
+  const bexh=document.getElementById('btn-ex-home');
+  if(bexh)bexh.onclick=()=>{resetExhibition();S.phase='setup';render();};
+
   // 完了画面：ホームへ
   const brch=document.getElementById('btn-rcp-home');
   if(brch)brch.onclick=()=>{resetReception();S.phase='setup';render();};
@@ -8695,12 +10486,16 @@ function bind(){
   };
   const bbmi=document.getElementById('btn-bk-matchid');if(bbmi)bbmi.onclick=()=>{S.phase='setup';render();};
   const bbmc=document.getElementById('btn-bk-matchconfirm');if(bbmc)bbmc.onclick=()=>{const m=S._matchConfirmMode;S._matchConfirmMode=null;S.phase=S._matchConfirmFrom||(m==='resultOnly'?'resultOnlyMatchId':'matchId');S._matchConfirmFrom=null;render();};
-  const bgcs=document.getElementById('btn-go-court-search');if(bgcs)bgcs.onclick=async()=>{
+  /* 【8-7】対戦コート／対戦相手の検索を開く。
+       evcode を渡すと、その大会を検索する（大会カードの「対戦相手を検索」）。
+       渡さなければ、これまでどおり開催中の大会（「試合」の「対戦コートを検索」）。 */
+  async function openCourtSearch(evcode){
     // 【体感速度改善】先に画面遷移してローディング表示し、通信は裏で実行する
     S._courtSearchExpanded=false;
+    S._csEventCode=String(evcode||'');
     S._courtSearchQuery={teamNo:'',matchCode:''};S._courtSearchResults=null;
     S._csLoading=true;S.phase='courtSearch';render();
-    const eventCode=await resolveActiveEventCode();
+    const eventCode=evcode?String(evcode):await resolveActiveEventCode();
     if(!eventCode){
       S._csLoading=false;
       if(S.phase==='courtSearch'){
@@ -8709,11 +10504,13 @@ function bind(){
       }
       return;
     }
-    // 配信中の大会コードでデータを同期（失敗してもローカルデータで続行）
+    S._csEventCode=String(eventCode);
+    // 対象の大会コードでデータを同期（失敗してもローカルデータで続行）
     await syncAllFromGitHub(eventCode);
-    // ローカルのactiveTourも更新
     const tour=AD.tournaments&&AD.tournaments.find(t=>t.eventCode===eventCode);
-    if(tour){AD.activeTourId=tour.id;saveAdmin(AD);}
+    /* 「いまの大会」を切り替えるのは、開催中の大会のときだけ。
+       開催前の大会を見ただけで受付の相手などがすり替わらないようにするため。 */
+    if(tour&&isLiveEventCode(eventCode)){AD.activeTourId=tour.id;saveAdmin(AD);}
     if(S.phase!=='courtSearch'){S._csLoading=false;return;}
     // 受付済みチームが今の大会と一致していれば、自動でそのチームの結果を表示
     const my=getValidMyTeam(eventCode);
@@ -8722,7 +10519,8 @@ function bind(){
       S._courtSearchResults=runCourtSearch(String(my.teamId),'');
     }
     S._csLoading=false;render();
-  };
+  }
+  const bgcs=document.getElementById('btn-go-court-search');if(bgcs)bgcs.onclick=()=>openCourtSearch('');
   // ホーム：パーソナライズ解除
   const bcmt=document.getElementById('btn-clear-myteam');
   if(bcmt)bcmt.onclick=()=>{clearMyTeam();render();};
@@ -8742,14 +10540,17 @@ function bind(){
     render();
   };
   // 大会情報サブ画面へのショートカット共通処理
-  async function openTournamentInfoView(view){
+  /* evcode を渡すと、その大会の情報を開く（大会カードのボタン）。
+     渡さなければ、これまでどおり開催中の大会。 */
+  async function openTournamentInfoView(view,evcode){
     // 【体感速度改善】先に画面遷移してローディング表示し、通信は裏で実行する
+    S._tiEventCode=String(evcode||'');
     S._tiView=view;S._tiLoading=true;S._tiError=null;
     if(view==='schedule')S._tiSchedule=[];
     else if(view==='regulation'){S._tiRegulation='';S._tiSections=null;}
     else if(view==='prelim'){S._tiPrelim=[];S._tiPrelimQuery='';S._tiPrelimSelected=null;}
     else if(view==='teamsearch')S._tsQuery='';
-    else if(view==='bracket'){S._tiBracket=null;S._tiBracketSide='left';}
+    else if(view==='bracket'||view==='bracketPick'){S._tiBracket=null;S._tiBracketSide='left';S._tiBracketNo=1;}
     S.phase='tournamentInfo';render();
 
     // 【会場のご案内】は端末内に保存済みのデータ（ホーム画面を開いたときに取得済み）だけで表示する。
@@ -8758,7 +10559,7 @@ function bind(){
     // 【大会の詳細】も端末内に保存済みのデータだけで表示する（通信しない＝API消費ゼロ）。
     if(view==='tourinfo'){S._tiLoading=false;render();return;}
 
-    const eventCode=await resolveActiveEventCode();
+    const eventCode=evcode?String(evcode):await resolveActiveEventCode();
     // 通信中にユーザーが「戻る」等で画面を離れた場合は結果を反映しない
     const stillHere=()=>S.phase==='tournamentInfo'&&S._tiView===view;
     if(!eventCode){
@@ -8768,10 +10569,25 @@ function bind(){
       }
       return;
     }
+    S._tiEventCode=String(eventCode);
     await syncAllFromGitHub(eventCode);
     const tour=AD.tournaments&&AD.tournaments.find(t=>t.eventCode===eventCode);
-    if(tour){AD.activeTourId=tour.id;saveAdmin(AD);}
+    // 「いまの大会」を切り替えるのは、開催中の大会のときだけ
+    if(tour&&isLiveEventCode(eventCode)){AD.activeTourId=tour.id;saveAdmin(AD);}
     if(!stillHere())return;
+    /* 【8-6】トーナメント表：この大会にトーナメントが2つ設定されていれば「選ぶ画面」を出す。
+       1つだけ（＝これまでの大会）なら、今までどおりそのままトーナメント表を開く。 */
+    if(view==='bracketPick'){
+      if(Number(tour&&tour.bracket2TeamCount)>0){S._tiLoading=false;render();return;}
+      S._tiBracketNo=1;S._tiView='bracket';render();
+      try{
+        const json=await fetchTournamentInfo('getBracket');
+        if(json.error)throw new Error('GAS: '+json.error);
+        S._tiBracket={rounds:json.rounds||[]};
+      }catch(e){S._tiError='取得に失敗しました: '+e.message;}
+      if(S.phase!=='tournamentInfo'||S._tiView!=='bracket')return;
+      S._tiLoading=false;render();return;
+    }
     try{
       if(view==='schedule'){
         const json=await fetchTournamentInfo('getSchedule');
@@ -8803,11 +10619,9 @@ function bind(){
     S._tiLoading=false;render();
   }
 
-  const bgreg=document.getElementById('btn-go-regulation');if(bgreg)bgreg.onclick=()=>openTournamentInfoView('regulation');
-  const bgsch=document.getElementById('btn-go-schedule');if(bgsch)bgsch.onclick=()=>openTournamentInfoView('schedule');
+  // ※「試合」グループのボタンは、これまでどおり開催中の大会だけを見る（第2引数を渡さない）
   const bgpre=document.getElementById('btn-go-prelim');if(bgpre)bgpre.onclick=()=>openTournamentInfoView('prelim');
-  const bgven=document.getElementById('btn-go-venue');if(bgven)bgven.onclick=()=>openTournamentInfoView('venue');
-  const bgtour=document.getElementById('btn-go-tourinfo');if(bgtour)bgtour.onclick=()=>openTournamentInfoView('tourinfo');
+
   // 「試合結果のみを送信」→ QRスキャン（結果のみモード）。配信中・開催期間中のみ
   const bgro=document.getElementById('btn-go-result-only');if(bgro)bgro.onclick=async()=>{
     // 【体感速度改善】カメラ起動前に通信＋開催期間チェックが必須のため画面遷移はできないが、
@@ -8842,27 +10656,38 @@ function bind(){
     S._matchIdInput='';S._matchIdError='';startQRScan('resultOnly');
   };
   const bgrem=document.getElementById('btn-go-remaining');if(bgrem)bgrem.onclick=()=>openTournamentInfoView('system');
-  const bgbr=document.getElementById('btn-go-bracket');if(bgbr)bgbr.onclick=()=>openTournamentInfoView('bracket');
+  const bgbr=document.getElementById('btn-go-bracket');if(bgbr)bgbr.onclick=()=>openTournamentInfoView('bracketPick');
   // ホーム：チームNoを検索
-  const bgts=document.getElementById('btn-go-teamsearch');if(bgts)bgts.onclick=()=>openTournamentInfoView('teamsearch');
+
   // ホーム：大会スプレッドシート（大会設定のsheetUrlを開く）
-  const bgssheet=document.getElementById('btn-go-spreadsheet');
-  if(bgssheet)bgssheet.onclick=async()=>{
-    const eventCode=await resolveActiveEventCode();
+  /* 【8-7】大会スプレッドシートを開く。evcode を渡すと、その大会のものを開く。 */
+  async function openEventSpreadsheet(evcode){
+    const eventCode=evcode?String(evcode):await resolveActiveEventCode();
     if(!eventCode){
       alert('現在、開催中の大会はありません。\n大会が開始されるまでお待ちください。');
       return;
     }
     await syncAllFromGitHub(eventCode);
     const tour=AD.tournaments&&AD.tournaments.find(t=>t.eventCode===eventCode);
-    if(tour){AD.activeTourId=tour.id;saveAdmin(AD);}
+    if(tour&&isLiveEventCode(eventCode)){AD.activeTourId=tour.id;saveAdmin(AD);}
     const url=tour&&tour.sheetUrl&&tour.sheetUrl.trim();
     if(!url){
       alert('この大会の対戦表スプレッドシートURLがまだ設定されていません。\n管理者にお問い合わせください。');
       return;
     }
     window.open(url,'_blank');
-  };
+  }
+
+  /* 【1-5・8-7にそろえた】大会カードのボタン。開催中カード・開催前カードのどちらからでも、
+     そのカードの大会（data-evcode）を開く。 */
+  const _cardBtn=(cls,fn)=>document.querySelectorAll('.'+cls).forEach(b=>b.onclick=()=>fn(b.dataset.evcode||''));
+  _cardBtn('card-btn-venue',      c=>openTournamentInfoView('venue',c));
+  _cardBtn('card-btn-tourinfo',   c=>openTournamentInfoView('tourinfo',c));
+  _cardBtn('card-btn-schedule',   c=>openTournamentInfoView('schedule',c));
+  _cardBtn('card-btn-regulation', c=>openTournamentInfoView('regulation',c));
+  _cardBtn('card-btn-teamsearch', c=>openTournamentInfoView('teamsearch',c));
+  _cardBtn('card-btn-sheet',      c=>openEventSpreadsheet(c));
+  _cardBtn('card-btn-opponent',   c=>openCourtSearch(c));
   const bbcs=document.getElementById('btn-bk-court-search');if(bbcs)bbcs.onclick=()=>{S.phase='setup';render();};
   // 対戦コート：他チーム検索の折りたたみトグル
   const bcst=document.getElementById('btn-cs-toggle');
@@ -8902,12 +10727,19 @@ function bind(){
   });
   const bcsRef=document.getElementById('btn-cs-refresh');
   if(bcsRef)bcsRef.onclick=async()=>{
-    const atour=activeTour();
+    /* 【1-5・8-7にそろえた】ここが activeTour()（＝いつも開催中の大会）を見ていたため、
+       開催前の大会を見ているときに押しても、開催中の大会を取り直すだけで、
+       画面の中身がいつまでも変わらなかった。
+       いま画面に出している大会（csTour）を更新する。 */
+    const atour=csTour();
     if(!atour||!atour.eventCode)return;
-    // キャッシュを無効化して強制更新
-    delete _jsonCache[atour.eventCode];
+    // 取っておいたデータを捨てて、必ず取り直す（設定と対戦カードの両方）
+    const ec=atour.eventCode;
+    delete _jsonCache[ec];                 // 対戦カード
+    delete _jsonCache['settings_'+ec];     // 大会の設定
+    delete _jsonCache['settings_raw_'+ec];
     bcsRef.textContent='取得中...';bcsRef.disabled=true;
-    await syncAllFromGitHub(atour.eventCode);
+    await syncAllFromGitHub(ec);
     render();
   };
   // 対戦コート検索：チーム名／チームNoのタブ切替（入力中の試合区分・チームは保持）
@@ -9024,6 +10856,8 @@ function bind(){
     // チーム情報をStateに反映
     const r=d.rule;
     S.fmt=r.fmt;S.turnLimit=r.turnLimit;S.playerMin=r.playerMin;S.playerMax=r.playerMax>=99?99:r.playerMax;
+    // シングルス大会は必ず1人。レシピの人数設定に関わらず1人ちょうどにそろえる
+    if(isSinglesActive()){S.playerMin=1;S.playerMax=1;}
     if(d.hasTeams){
       const mA=d.teamA.members?d.teamA.members.split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
       const mB=d.teamB.members?d.teamB.members.split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
@@ -9049,6 +10883,8 @@ function bind(){
     if(!d||!d.hasRule)return;
     const r=d.rule;
     S.fmt=r.fmt;S.turnLimit=r.turnLimit;S.playerMin=r.playerMin;S.playerMax=r.playerMax>=99?99:r.playerMax;
+    // シングルス大会は必ず1人。レシピの人数設定に関わらず1人ちょうどにそろえる
+    if(isSinglesActive()){S.playerMin=1;S.playerMax=1;}
     if(d.hasTeams){
       const mA=d.teamA.members?d.teamA.members.split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
       const mB=d.teamB.members?d.teamB.members.split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
@@ -9270,6 +11106,11 @@ function bind(){
   const btib=document.getElementById('btn-ti-back');if(btib)btib.onclick=()=>{S._tiView=null;S.phase='setup';render();};
   // サブ画面の戻る → メニュー画面へ（phaseはtournamentInfoのまま、_tiViewだけクリア）
   const btisb=document.getElementById('btn-ti-sub-back');if(btisb)btisb.onclick=()=>{S._tiView=null;S._tiLoading=false;S._tiError=null;S.phase='setup';render();};
+  // 【8-6】トーナメント表：どちらを見るかを選ぶボタン
+  const btb1=document.getElementById('btn-ti-bracket-1');if(btb1)btb1.onclick=()=>loadBracketNo(1);
+  const btb2=document.getElementById('btn-ti-bracket-2');if(btb2)btb2.onclick=()=>loadBracketNo(2);
+  // 【8-6】トーナメント表 →「選ぶ画面」へ戻る（トーナメントが2つある大会のみ）
+  const btbb=document.getElementById('btn-ti-bracket-back');if(btbb)btbb.onclick=()=>{S._tiView='bracketPick';S._tiLoading=false;S._tiError=null;render();};
   // タイムスケジュール
   const btisc=document.getElementById('btn-ti-schedule');
   if(btisc)btisc.onclick=async()=>{
