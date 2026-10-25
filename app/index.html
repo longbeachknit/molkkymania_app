@@ -7864,6 +7864,20 @@ function maybeLoadExhSchedule(code){
      { ok:確かめられたか, games:{1:true,2:false,…}, anyOpen:どれか受付中か } */
 async function fetchExhibitionOpen_(code){
   const fileName=toJsonFileCode(code)+'_exhibition.json';
+  /* ★2026-10-25 変更（1-5）：まず Supabase の exhibition_state を見る。
+       GitHub と違って回数の上限がなく、置いた瞬間の中身が返る。
+       対戦表D の GAS（2026-10-25 版〜）が、受付の開始／終了のたびにここへ書く。
+       ・行がある     → それを使う（GitHub は見ない）
+       ・行が無い     → まだ古い GAS の大会。下の GitHub を見る（今までどおり）
+       ・通信に失敗   → 下の GitHub を見る */
+  try{
+    const res=await fetch(SB_URL+'/rest/v1/exhibition_state?event_code=eq.'+encodeURIComponent(toJsonFileCode(code))+'&select=games,times&limit=1',
+      {cache:'no-store',headers:sbHeaders()});
+    if(res.ok){
+      const rows=await res.json();
+      if(rows&&rows.length)return exhParseOpenJson_({games:rows[0].games||{},times:rows[0].times||{}});
+    }
+  }catch(e){}
   const read=async()=>{
     const res=await fetch(GITHUB_DATA_BASE+'/'+fileName+'?t='+Date.now(),
       {cache:'no-store',headers:{'Accept':'application/vnd.github.v3+json'}});
