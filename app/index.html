@@ -9338,7 +9338,7 @@ function teamPosition_(tour,teamNo,sched){
         const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
         const ot=(tour.teams||[]).find(t=>sameNo_(t.id,opp));
         return {curLabel:here+'（不戦勝）',mark:{c:home.c,r:home.r},
-          next:{known:true,label:here+'（不戦勝）',byeName:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
+          next:{known:true,matchId:m.matchId,label:here+'（不戦勝）',byeName:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
                 time:posTimeOf_(sched,tn,rd,mn)},
           remain:rem};
       }
@@ -9361,7 +9361,7 @@ function teamPosition_(tour,teamNo,sched){
   if(!res){
     const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
     const ot=(tour.teams||[]).find(t=>sameNo_(t.id,opp));
-    out.next={known:true,label:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
+    out.next={known:true,matchId:m.matchId,label:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
               time:posTimeOf_(sched,tn,rd,mn)};
     out.remain=pc?posRemain_(pc.cols,pc.c,pc.r):null;
     return out;
@@ -9406,14 +9406,21 @@ function posBoxHtml_(tour,teamNo,theme,full){
   if(!tour||!teamNo)return '';
   const box=inner=>`<div style="${full?'grid-column:1 / -1;':''}background:#fff;border:1.5px solid ${theme||'#e5e7eb'};border-radius:10px;padding:10px 12px;line-height:1.6;margin-bottom:${full?0:12}px;">${inner}</div>`;
   /* 【2026-10-26】ホームの枠の右下に、試合システム図へのボタン（「残り試合数を確認」のかわり） */
-  const sysBtn=full?`<div style="text-align:right;margin-top:6px;"><button id="btn-go-remaining" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1px solid ${theme||'#d1d5db'};border-radius:8px;background:#fff;color:#1a1a1a;cursor:pointer;">試合システム図で、勝ったら・負けたらの進み先を見る ›</button></div>`:'';
+  const sysBtn=full?`<div style="text-align:right;margin-top:6px;"><button id="btn-go-remaining" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1px solid ${theme||'#d1d5db'};border-radius:8px;background:#fff;color:#1a1a1a;cursor:pointer;">現在地を確認 ›</button></div>`:'';
   if(S._posReady!==tour.eventCode+'|'+pad3s_(teamNo))return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>'+sysBtn);
-  const t=posTexts_(teamPosition_(tour,teamNo,S._posSched||[]));
+  const _pp=teamPosition_(tour,teamNo,S._posSched||[]);
+  const t=posTexts_(_pp);
   if(!t)return '';
+  /* 【2026-10-26】ホームの枠：次の試合が決まっていれば、対戦相手・コートの画面と同じ「この試合を開始する」とコート図。
+     結果が送信されたら、次の試合は「配信待ち」になるので、どちらも出なくなる。 */
+  const _nx=_pp&&_pp.next&&_pp.next.known&&_pp.next.matchId?_pp.next:null;
+  const startHtml=(full&&_nx)
+    ?`<button class="btn btn-green cs-start-btn" data-matchid="${escSc_(_nx.matchId)}" data-from="setup" style="width:100%;padding:12px;font-size:15px;font-weight:700;margin-top:10px;">この試合を開始する →</button>
+      ${renderCourtMapBlock(tour.courtLayout,_nx.court,_nx.matchId)}`:'';
   return box(`<div style="font-size:14px;font-weight:800;color:#1a1a1a;">現在：${escSc_(t.now)}</div>
     <div style="font-size:13px;font-weight:700;color:#374151;">次の試合：${escSc_(t.next)}</div>
     ${t.prev?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.prev)}</div>`:''}
-    ${t.sub?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.sub)}</div>`:''}${sysBtn}`);
+    ${t.sub?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.sub)}</div>`:''}${startHtml}${sysBtn}`);
 }
 /* ホームの開催中の大会（rSetup と同じ決め方） */
 function posLiveTour_(){
@@ -11930,7 +11937,7 @@ function bind(){
       const result=resolveMatchId(mid);
       if(!result){alert('試合データの取得に失敗しました。もう一度お試しください。');btn.disabled=false;btn.textContent='この試合を開始する →';return;}
       S.matchIdData=result;
-      S._matchConfirmFrom='courtSearch';
+      S._matchConfirmFrom=btn.dataset.from||'courtSearch';   // 【2026-10-26】ホームの現在地の枠から押したときはホームへ戻る
       S.phase='matchConfirm';render();
     });
   });
