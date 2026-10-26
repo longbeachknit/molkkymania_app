@@ -8236,7 +8236,7 @@ function rTournamentInfo(){
     const _pMy=tour?getValidMyTeam(tour.eventCode):null;
     const _pNo=S._posTeamNo||(_pMy?String(_pMy.teamId):'');
     const _pTeams=((tour&&tour.teams)||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
-    const _pPos=(_pNo&&tour&&S._posReady===tour.eventCode)?teamPosition_(tour,_pNo,S._posSched||[]):null;
+    const _pPos=(_pNo&&tour&&S._posReady===tour.eventCode+'|'+pad3s_(_pNo))?teamPosition_(tour,_pNo,S._posSched||[]):null;
     const _pSel=_pTeams.length?`<select id="pos-team-select" style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:10px;font-size:14px;background:#fff;margin-bottom:8px;">
         <option value="">-- ${wTeam(tour||null)}を選ぶと、いまの位置を表示します --</option>
         ${_pTeams.map(t=>`<option value="${escSc_(t.id)}" ${String(_pNo)===String(t.id)?'selected':''}>No.${escSc_(t.id)}　${escSc_(t.name||'')}</option>`).join('')}
@@ -9132,9 +9132,66 @@ function posTourneyName_(tour,tc){const r=(tour.tourneyRules||[]).find(x=>String
 function posRoundOf_(tour,mc,tc){const r=(tour.roundRules||[]).find(x=>String(x.matchCode)===String(mc)&&String(x.tourneyCode)===String(tc));return r?String(r.round||''):'';}
 function posColName_(col){return String((col&&col.name)||'').replace(/\\n|\n|<br\s*\/?>/gi,'');}
 function posRoundTxt_(r){return String(r||'').replace(/、/g,'・');}
+/* 【2026-10-26】現在地のために、そのチームの結果だけを読む。
+   大会全体の結果一覧（終盤で約15KB）を読む代わりに、
+     ① そのチームが出た試合の試合IDだけ（とても小さい）
+     ② その試合の両チームの勝ち負け
+     ③ 結果反映シートの、そのチームの行
+   だけを読む（あわせて1〜2KBほど）。通信量を減らすため。 */
+let _posRes={key:'',team:'',map:{},sheet:{}};
+async function loadPosResults_(tour,teamNo){
+  const key=sbEventKeyOf_(tour);
+  if(!key||!teamNo)return;
+  const hd={'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON};
+  const n=String(teamNo).trim();
+  const alt=[n,pad3s_(n),String(parseInt(n,10))].filter((v,i,a)=>v&&v!=='NaN'&&a.indexOf(v)===i);
+  const inList=arr=>encodeURIComponent('in.('+arr.map(v=>'"'+String(v).replace(/"/g,'')+'"').join(',')+')');
+  const ek=encodeURIComponent(key);
+  const get=async u=>{const r=await fetch(SB_URL+'/rest/v1/'+u,{cache:'no-store',headers:hd});if(!r.ok)throw new Error('HTTP '+r.status);return (await r.json())||[];};
+  const mine=await get('team_results?event_code=eq.'+ek+'&team_no='+inList(alt)+'&select=match_id');
+  const ids=[...new Set(mine.map(r=>r.match_id).filter(Boolean))];
+  const map={};
+  if(ids.length){
+    (await get('team_results?event_code=eq.'+ek+'&match_id='+inList(ids)+'&select=match_id,team_no,result')).forEach(r=>{
+      if(r.result==null||String(r.result).trim()==='')return;
+      (map[r.match_id]=map[r.match_id]||[]).push(r);
+    });
+  }
+  const sheet={};
+  try{
+    (await get('sheet_results?event_key=eq.'+ek+'&team_no='+inList(alt)+'&select=match_id,team_no,v1,v2,combined_id')).forEach(r=>{
+      (sheet[r.match_id]=sheet[r.match_id]||[]).push(r);
+    });
+  }catch(e){}
+  _posRes={key:key,team:pad3s_(n),map:map,sheet:sheet};
+}
+function posOwn_(tour,teamNo){return !!(tour&&_posRes.key&&_posRes.key===sbEventKeyOf_(tour)&&_posRes.team===pad3s_(teamNo));}
+/* その試合の結果（そのチームの分を読んであればそれ、無ければ大会全体の一覧から） */
+function posSentOf_(tour,matchId,teamNo){
+  if(!posOwn_(tour,teamNo))return sentResultOf_(matchId);
+  const a=_posRes.map[matchId]||null,sh=_posRes.sheet[matchId]||null;
+  return (a||sh)?{app:a,sheet:sh}:null;
+}
+/* 対戦表に無くても結果が届いている、そのチームの試合のカード */
+function posCards_(tour,teamNo){
+  if(!posOwn_(tour,teamNo))return sentMatchCards_(tour);
+  const out={};
+  Object.keys(_posRes.sheet).forEach(mid=>{
+    const r=(_posRes.sheet[mid]||[]).find(x=>x.combined_id);
+    const c=r?cardFromCombinedId_(r.combined_id):null;
+    if(c)out[c.matchId]=c;
+  });
+  Object.keys(_posRes.map).forEach(mid=>{
+    if(out[mid])return;
+    const rows=_posRes.map[mid]||[];
+    if(rows.length<2)return;
+    out[mid]={matchId:mid,tourneyCode:'',teamA:pad3s_(rows[0].team_no),teamB:pad3s_(rows[1].team_no),combinedId:''};
+  });
+  return Object.keys(out).map(k=>out[k]);
+}
 /* その試合でのチームの勝ち負け。'win'／'lose'／'done'（終わったが勝ち負けなし）／null（まだ結果なし） */
-function posResultOf_(matchId,teamNo){
-  const s=sentResultOf_(matchId);
+function posResultOf_(matchId,teamNo,tour){
+  const s=posSentOf_(tour,matchId,teamNo);
   if(!s)return null;
   const sh=(s.sheet||[]).find(x=>sameNo_(x.team_no,teamNo));
   const ap=(s.app||[]).find(x=>sameNo_(x.team_no,teamNo));
@@ -9223,7 +9280,7 @@ function posRemain_(cols,c,r){
 function teamPosition_(tour,teamNo,sched){
   if(!tour||!teamNo)return null;
   const seen={},mine=[];
-  (tour.matches||[]).concat(sentMatchCards_(tour)).forEach(m=>{
+  (tour.matches||[]).concat(posCards_(tour,teamNo)).forEach(m=>{
     if(!m||!m.matchId||seen[m.matchId])return;
     if(!(sameNo_(m.teamA,teamNo)||sameNo_(m.teamB,teamNo)))return;
     seen[m.matchId]=1;mine.push(m);
@@ -9238,7 +9295,7 @@ function teamPosition_(tour,teamNo,sched){
   const curLabel=(tn&&rd)?(tn+posRoundTxt_(rd)):(mn||('試合区分'+mc));
   const isPre=!(tn&&rd);
   const pc=isPre?null:posCellOf_(tour,mc,tc);
-  const res=posResultOf_(m.matchId,teamNo);
+  const res=posResultOf_(m.matchId,teamNo,tour);
   const out={curLabel:curLabel,mark:pc?{c:pc.c,r:pc.r}:null};
   if(!res){
     const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
@@ -9287,7 +9344,7 @@ function posTexts_(p){
 function posBoxHtml_(tour,teamNo,theme,full){
   if(!tour||!teamNo)return '';
   const box=inner=>`<div style="${full?'grid-column:1 / -1;':''}background:#fff;border:1.5px solid ${theme||'#e5e7eb'};border-radius:10px;padding:10px 12px;line-height:1.6;margin-bottom:${full?0:12}px;">${inner}</div>`;
-  if(S._posReady!==tour.eventCode)return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>');
+  if(S._posReady!==tour.eventCode+'|'+pad3s_(teamNo))return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>');
   const t=posTexts_(teamPosition_(tour,teamNo,S._posSched||[]));
   if(!t)return '';
   return box(`<div style="font-size:14px;font-weight:800;color:#1a1a1a;">現在：${escSc_(t.now)}</div>
@@ -9307,19 +9364,22 @@ function maybeRefreshPos_(){
   const home=S.phase==='setup';
   const tour=home?posLiveTour_():tiTour();
   if(!tour||!tour.eventCode)return;
-  if(home&&!getValidMyTeam(tour.eventCode))return;
+  const my=getValidMyTeam(tour.eventCode);
+  const team=home?(my?String(my.teamId):''):(S._posTeamNo||(my?String(my.teamId):''));
+  if(!team)return;
   const code=tour.eventCode;
-  if(_posBusy_||(S._posCode===code&&Date.now()-(S._posAt||0)<60000))return;
-  _posBusy_=true;S._posCode=code;S._posAt=Date.now();
+  const rk=code+'|'+pad3s_(team);   // 大会とチームの組み合わせごとに読む
+  if(_posBusy_||(S._posCode===rk&&Date.now()-(S._posAt||0)<60000))return;
+  _posBusy_=true;S._posCode=rk;S._posAt=Date.now();
   const sch=(typeof sbFetchDoc==='function')
     ?sbFetchDoc(code,'info').then(d=>(d&&d.schedule)||[])
     :fetchExhSchedule_(code);
   Promise.all([
     syncMatchesFromGitHub(code).catch(()=>{}),
-    loadSentResults_(tour,true).catch(()=>{}),
+    loadPosResults_(tour,team).catch(()=>{}),   // 【2026-10-26】そのチームの結果だけ
     sch.then(r=>{S._posSched=r||[];}).catch(()=>{})
   ]).then(()=>{
-    _posBusy_=false;S._posReady=code;
+    _posBusy_=false;S._posReady=rk;
     if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))render();
   });
 }
