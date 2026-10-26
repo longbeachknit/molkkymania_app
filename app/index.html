@@ -3192,8 +3192,8 @@ function rBeginner(){
       P('ホーム画面のボタンから、たいていのことは調べられます。')
       +TBL(['知りたいこと','押すボタン'],
         [['<b>今日のルール</b>','レギュレーション'],
-         ['<b>次の試合は何時から？</b>','タイムスケジュール'],
-         ['<b>あと何回勝てば優勝？</b>','残り試合数を確認'],
+         ['<b>次の試合は何時から？</b>','開催中の大会のカードのタイムスケジュール（いま進んでいる行に印が付きます）'],
+         ['<b>あと何回勝てば優勝？</b>','受付後に出る「現在」の枠（右下の「試合システム図」で進み先も見られます）'],
          ['<b>予選の順位は？</b>','予選成績を確認'],
          ['<b>トーナメントの状況は？</b>','トーナメント表'],
          ['<b>トイレ・駐車場・行き方は？</b>','会場の詳細'],
@@ -3241,7 +3241,7 @@ function eventCardBtnsHtml(tour,theme,opts){
   return`<div style="${live?'display:contents;':'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;'}">
     ${b('card-btn-venue',(live?'':'📍 ')+'会場の詳細')}
     ${b('card-btn-tourinfo',(live?'':'📋 ')+'大会の詳細')}
-    ${b('card-btn-schedule',(live?'':'🕐 ')+'タイムスケジュール')}
+    ${live?'':b('card-btn-schedule','🕐 タイムスケジュール')}   <!-- 開催中のカードでは、表をいつも出すのでボタンは無し -->
     ${b('card-btn-regulation',(live?'':'📜 ')+'レギュレーション')}
     ${live?'':b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
     ${b('card-btn-sheet',(live?'':'📑 ')+'大会スプレッドシート')}
@@ -3268,7 +3268,7 @@ function liveMatchBtnsHtml(tour,theme,extra,pos){
       ${b('btn-go-result-only','📤 試合結果のみを送信',true)}
       <button class="card-btn-opponent" data-evcode="${esc(code)}" style="${st(true)}">🔍 対戦相手・コートを検索</button>
       ${b('btn-go-prelim','予選成績を確認',true)}
-      ${b('btn-go-remaining','残り試合数を確認')}
+      ${liveSchedHtml_(tour,theme)}
       ${b('btn-go-bracket','トーナメント表')}
       <button id="btn-go-court-search" data-evcode="${esc(code)}" style="${st(false)}">送信済みの試合を確認</button>
       ${extra||''}
@@ -8245,7 +8245,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">試合システム</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">試合システム図</div>
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:12px;">一度負けると右のトーナメントへ移動します。今いるトーナメント・回戦から、残りの試合数を確認できます。</div>
       ${loading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
@@ -9126,7 +9126,9 @@ function bracketMatchIdOf_(tour,src,n1,n2){
      ・結果がある → 勝ち負けと試合システム図から、次に進むトーナメント・回戦を出す
                      （相手とコートは、対戦表が配信されるまで分からない）
    ========================================================================= */
-function posNorm_(s){return String(s==null?'':s).replace(/\\n|\n|<br\s*\/?>/gi,'').replace(/[\s　]+/g,'').replace(/トーナメント/g,'トナメ').replace(/、/g,'・');}
+/* 名前の照らし合わせ用。空白・改行を消し、「トーナメント」「トナメ」「決定T」を同じもの（T）として扱う
+   （大会ルールの「5位タイトーナメント」と、試合システム図の「5位タイ決定T」が同じだと分かるように） */
+function posNorm_(s){return String(s==null?'':s).replace(/\\n|\n|<br\s*\/?>/gi,'').replace(/[\s　]+/g,'').replace(/トーナメント|トナメ/g,'T').replace(/決定T/g,'T').replace(/、/g,'・');}
 function posMatchName_(tour,mc){const r=(tour.matchRules||[]).find(x=>String(x.code)===String(mc));return r?String(r.name||''):'';}
 function posTourneyName_(tour,tc){const r=(tour.tourneyRules||[]).find(x=>String(x.code)===String(tc));return r?String(r.name||''):'';}
 function posRoundOf_(tour,mc,tc){const r=(tour.roundRules||[]).find(x=>String(x.matchCode)===String(mc)&&String(x.tourneyCode)===String(tc));return r?String(r.round||''):'';}
@@ -9276,6 +9278,37 @@ function posRemain_(cols,c,r){
   const last=(col.startRow||0)+col.cells.length-1;
   return {k:last-r+1,name:name};
 }
+/* 【2026-10-26】不戦勝交流戦（トーナメントで相手がいないチームが、その回のあいだに出る交流戦）。
+   トーナメント種類の名前に「不戦勝」が入っていれば、不戦勝交流戦として扱う。
+   このときの現在地は「不戦勝交流戦」ではなく、そのチームがいるトーナメント（例：5位タイ決定T 1回戦）。
+   いるトーナメントの見つけ方：
+     ① 試合システム図の、不戦勝交流戦ではない列に「不戦勝交流戦①」のような箱があれば、その列（例：5位タイ決定T の一番上）
+     ② 無ければ、1つ前の試合の結果から進む先（例：決勝トーナメント1回戦で負け → 5位タイ決定T 1回戦）
+   不戦勝交流戦が終わったら、そのトーナメントの次の回戦へ進む（不戦勝なので、勝ち負けは関係ない）。 */
+function posIsBye_(tour,tc){return /不戦勝/.test(posTourneyName_(tour,tc));}
+function posAfter_(tour,match,teamNo){
+  const p=match.matchId.split('_');const mc=p[2]||'',tc=String(match.tourneyCode||'');
+  const res=posResultOf_(match.matchId,teamNo,tour);
+  if(posTourneyName_(tour,tc)&&posRoundOf_(tour,mc,tc)){
+    const pc=posCellOf_(tour,mc,tc);if(!pc)return null;
+    const n=posNextCell_(pc,res);
+    return (n&&!n.end)?{c:n.c,r:n.r,cols:pc.cols,ch:pc.ch}:null;
+  }
+  return posPrelimNext_(tour,mc,res)||null;
+}
+function posByeHome_(tour,tn,rd,prev,teamNo){
+  const ch=tour.systemChart;
+  if(!ch||!ch.columns||!ch.columns.length)return null;
+  const cols=scRepairCols(ch.columns);
+  const key=posNorm_(tn+rd);
+  for(let c=0;c<cols.length;c++){
+    if(/不戦勝/.test(posColName_(cols[c])))continue;
+    const cells=cols[c].cells||[];
+    for(let i=0;i<cells.length;i++)if(posNorm_(cells[i])===key)return {c:c,r:(cols[c].startRow||0)+i,cols:cols,ch:ch,self:true};
+  }
+  if(prev){const a=posAfter_(tour,prev,teamNo);if(a&&!/不戦勝/.test(posColName_(a.cols[a.c])))return a;}
+  return null;
+}
 /* そのチームの現在地をまとめる */
 function teamPosition_(tour,teamNo,sched){
   if(!tour||!teamNo)return null;
@@ -9293,6 +9326,34 @@ function teamPosition_(tour,teamNo,sched){
   const mc=parts[2]||'',tc=String(m.tourneyCode||'');
   const tn=posTourneyName_(tour,tc),rd=posRoundOf_(tour,mc,tc),mn=posMatchName_(tour,mc);
   const curLabel=(tn&&rd)?(tn+posRoundTxt_(rd)):(mn||('試合区分'+mc));
+  if(tn&&rd&&posIsBye_(tour,tc)){
+    const home=posByeHome_(tour,tn,rd,mine[1]||null,teamNo);
+    if(home){
+      const hcol=home.cols[home.c],hn=posColName_(hcol),ht=posCellTxt_(home.cols,home.c,home.r);
+      const here=home.self?hn:(hn+posRoundTxt_(ht));
+      const rem=posRemain_(home.cols,home.c,home.r);
+      if(rem)rem.k=Math.max(1,rem.k-1);   // 不戦勝の回は勝たなくてよい
+      const res0=posResultOf_(m.matchId,teamNo,tour);
+      if(!res0){
+        const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
+        const ot=(tour.teams||[]).find(t=>sameNo_(t.id,opp));
+        return {curLabel:here+'（不戦勝）',mark:{c:home.c,r:home.r},
+          next:{known:true,label:here+'（不戦勝）',byeName:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
+                time:posTimeOf_(sched,tn,rd,mn)},
+          remain:rem};
+      }
+      const n=posNextCell_(home,'win');
+      if(!n||n.end)return {curLabel:curLabel,lastRes:res0,end:'done'};
+      const ncol=home.cols[n.c],nct=posCellTxt_(home.cols,n.c,n.r),nnm=posColName_(ncol);
+      return {curLabel:curLabel,lastRes:res0,byeDone:true,mark:{c:n.c,r:n.r},
+        next:{known:false,label:nnm+posRoundTxt_(nct),note:/交流/.test(nnm)?(ncol.note||''):'',
+              time:posTimeOf_(sched,nnm,nct,((tour.systemChart&&tour.systemChart.rowLabels)||[])[n.r])},
+        remain:posRemain_(home.cols,n.c,n.r)};
+    }
+    // いるトーナメントが図から分からないとき：終わったら「配信待ち」（不戦勝なので、次の回戦がある）
+    const res1=posResultOf_(m.matchId,teamNo,tour);
+    if(res1)return {curLabel:curLabel,lastRes:res1,pending:true};
+  }
   const isPre=!(tn&&rd);
   const pc=isPre?null:posCellOf_(tour,mc,tc);
   const res=posResultOf_(m.matchId,teamNo,tour);
@@ -9321,7 +9382,7 @@ function teamPosition_(tour,teamNo,sched){
   const nm=posColName_(col),ct=posCellTxt_(cols,nx.c,nx.r);
   out.mark={c:nx.c,r:nx.r};
   const _lab=nx.third?'3位決定戦':(posNorm_(ct).indexOf(posNorm_(nm))===0?'':nm)+posRoundTxt_(ct);   // 「交流戦交流戦④」にならないように
-  out.next={known:false,label:nx.third?(nm+_lab):_lab,note:col.note||'',
+  out.next={known:false,label:nx.third?(nm+_lab):_lab,note:/交流/.test(nm)?(col.note||''):'',
             time:posTimeOf_(sched,nm,ct,((tour.systemChart&&tour.systemChart.rowLabels)||[])[nx.r])};
   out.remain=nx.third?null:posRemain_(cols,nx.c,nx.r);
   return out;
@@ -9338,19 +9399,21 @@ function posTexts_(p){
   const n=p.next;
   const tm=n.time?('／開始時間：'+posTimeJa_(n.time)):'';
   const sub=p.remain?('あと'+p.remain.k+'勝で'+p.remain.name+'優勝'):'';
-  if(n.known)return {now:n.label,next:'コート'+n.court+'・vs '+n.oppName+tm,sub:sub};
-  return {now:n.label+(n.note?'（'+n.note+'）':''),next:'対戦相手・コートは配信待ち'+tm,prev:'前の試合：'+p.curLabel+' '+R(p.lastRes),sub:sub};
+  if(n.known)return {now:n.label,next:(n.byeName?n.byeName+'・':'')+'コート'+n.court+'・vs '+n.oppName+tm,sub:sub};
+  return {now:n.label+(n.note?'（'+n.note+'）':''),next:'対戦相手・コートは配信待ち'+tm,prev:'前の試合：'+p.curLabel+' '+R(p.lastRes)+(p.byeDone?'（不戦勝で次の回戦へ）':''),sub:sub};
 }
 function posBoxHtml_(tour,teamNo,theme,full){
   if(!tour||!teamNo)return '';
   const box=inner=>`<div style="${full?'grid-column:1 / -1;':''}background:#fff;border:1.5px solid ${theme||'#e5e7eb'};border-radius:10px;padding:10px 12px;line-height:1.6;margin-bottom:${full?0:12}px;">${inner}</div>`;
-  if(S._posReady!==tour.eventCode+'|'+pad3s_(teamNo))return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>');
+  /* 【2026-10-26】ホームの枠の右下に、試合システム図へのボタン（「残り試合数を確認」のかわり） */
+  const sysBtn=full?`<div style="text-align:right;margin-top:6px;"><button id="btn-go-remaining" style="font-size:11.5px;font-weight:700;padding:5px 10px;border:1px solid ${theme||'#d1d5db'};border-radius:8px;background:#fff;color:#1a1a1a;cursor:pointer;">試合システム図で、勝ったら・負けたらの進み先を見る ›</button></div>`:'';
+  if(S._posReady!==tour.eventCode+'|'+pad3s_(teamNo))return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>'+sysBtn);
   const t=posTexts_(teamPosition_(tour,teamNo,S._posSched||[]));
   if(!t)return '';
   return box(`<div style="font-size:14px;font-weight:800;color:#1a1a1a;">現在：${escSc_(t.now)}</div>
     <div style="font-size:13px;font-weight:700;color:#374151;">次の試合：${escSc_(t.next)}</div>
     ${t.prev?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.prev)}</div>`:''}
-    ${t.sub?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.sub)}</div>`:''}`);
+    ${t.sub?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.sub)}</div>`:''}${sysBtn}`);
 }
 /* ホームの開催中の大会（rSetup と同じ決め方） */
 function posLiveTour_(){
@@ -9383,6 +9446,102 @@ function maybeRefreshPos_(){
     if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))render();
   });
 }
+
+/* =========================================================================
+   【2026-10-26】開催中の大会のカードに、タイムスケジュールをいつも出す
+   （「タイムスケジュール」のボタンのかわり）。
+   スマホの時計と照らし合わせて、
+     ・いま進んでいる行に「いまここ」（同じ時間に並んで進む行は両方）
+     ・どの行の時間でもないときは、次に始まる行に「次」
+   を付ける。大会の日（大会設定の試合開催期間）以外の日は、印を付けない。
+   時間が進んで印の場所が変わったら、ホームを描き直す（30秒ごとに確かめる）。
+   ========================================================================= */
+function schedMin_(t){const m=String(t||'').match(/(\d{1,2})\s*[:：]\s*(\d{2})/);return m?parseInt(m[1],10)*60+parseInt(m[2],10):null;}
+function liveSchedItems_(rows){
+  return (rows||[]).map(r=>{
+    const nm=String(r&&r.name!=null?r.name:'').trim(),tm=String(r&&r.time!=null?r.time:'').trim();
+    if((r&&r.type==='gap')||(nm===''&&tm===''))return{k:'gap'};
+    if((r&&r.type==='header')||(nm!==''&&tm===''))return{k:'head',name:nm};
+    const ts=tm.match(/\d{1,2}\s*[:：]\s*\d{2}/g)||[];
+    const a=ts.length?schedMin_(ts[0]):null,b=ts.length>1?schedMin_(ts[1]):null;
+    return{k:'row',name:nm,time:tm,a:a,b:b};
+  });
+}
+function liveSchedState_(tour,items,now){
+  now=now||new Date();
+  const dn=t=>t.getFullYear()*10000+(t.getMonth()+1)*100+t.getDate();
+  const pd=x=>{if(!x)return null;const t=new Date(x);return isNaN(t)?null:dn(t);};
+  const today=dn(now),ds=pd(tour&&tour.eventPeriodStart),de=pd(tour&&tour.eventPeriodEnd);
+  const inDay=(ds==null||today>=ds)&&(de==null||today<=de);
+  const cur=now.getHours()*60+now.getMinutes();
+  const curIdx=[],nextIdx=[];let ended=false;
+  if(inDay){
+    items.forEach((it,i)=>{if(it.k==='row'&&it.a!=null){const e=it.b!=null?it.b:it.a+1;if(it.a<=cur&&cur<e)curIdx.push(i);}});
+    if(!curIdx.length){
+      let best=null;
+      items.forEach(it=>{if(it.k==='row'&&it.a!=null&&it.a>cur&&(best==null||it.a<best))best=it.a;});
+      if(best!=null)items.forEach((it,i)=>{if(it.k==='row'&&it.a===best)nextIdx.push(i);});
+      else ended=items.some(it=>it.k==='row'&&it.a!=null);
+    }
+  }
+  return {inDay:inDay,cur:curIdx,next:nextIdx,ended:ended,now:cur,sig:(inDay?1:0)+'|'+curIdx.join(',')+'|'+nextIdx.join(',')+'|'+(ended?1:0)};
+}
+function liveSchedHtml_(tour,theme){
+  if(!tour)return '';
+  const wrap=inner=>`<div style="grid-column:1 / -1;background:#fff;border:1.5px solid ${theme||'#e5e7eb'};border-radius:10px;padding:10px 12px;">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin-bottom:6px;">
+        <div style="font-size:13px;font-weight:800;color:#1a1a1a;">タイムスケジュール</div>
+        <div style="font-size:11px;color:#6b7280;">${(()=>{const d=new Date();return'いま '+d.getHours()+':'+String(d.getMinutes()).padStart(2,'0');})()}</div>
+      </div>${inner}</div>`;
+  const ls=S._liveSched;
+  if(!ls||ls.code!==tour.eventCode)return wrap('<div style="font-size:12px;color:#9ca3af;">読み込み中…</div>');
+  const items=liveSchedItems_(ls.rows);
+  if(!items.some(it=>it.k==='row'))return wrap('<div style="font-size:12px;color:#9ca3af;">タイムスケジュールはまだ配信されていません</div>');
+  const st=liveSchedState_(tour,items);
+  S._liveSchedSig=st.sig;
+  let h='',started=false,gap=false;
+  items.forEach((it,i)=>{
+    if(it.k==='gap'){if(started)gap=true;return;}
+    if(it.k==='head'){
+      h+=`<div style="margin-top:${started?10:0}px;padding:4px 8px;background:#f3f4f6;border-radius:6px;font-size:12px;font-weight:800;color:#374151;">${escSc_(it.name)}</div>`;
+      started=true;gap=false;return;
+    }
+    if(gap){h+='<div style="height:6px;"></div>';gap=false;}
+    const isCur=st.cur.indexOf(i)>=0,isNext=st.next.indexOf(i)>=0;
+    const past=st.inDay&&it.a!=null&&!isCur&&(it.b!=null?it.b:it.a+1)<=st.now;
+    const tag=isCur?'<span style="font-size:10px;font-weight:800;color:#fff;background:#f59e0b;border-radius:99px;padding:1px 7px;margin-right:6px;">いまここ</span>'
+             :(isNext?'<span style="font-size:10px;font-weight:800;color:#b45309;border:1px solid #f59e0b;border-radius:99px;padding:0 6px;margin-right:6px;">次</span>':'');
+    h+=`<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-bottom:1px solid #f1f2f4;${isCur?'background:#FFF3C4;border-radius:6px;':''}${past?'color:#9ca3af;':'color:#1a1a1a;'}">
+        <div style="flex:1;min-width:0;font-size:12.5px;font-weight:${isCur?800:600};">${tag}${escSc_(it.name)}</div>
+        <div style="font-size:12px;white-space:nowrap;font-weight:${isCur?800:500};">${escSc_(it.time)}</div>
+      </div>`;
+    started=true;
+  });
+  if(st.ended)h+='<div style="font-size:11.5px;color:#6b7280;margin-top:6px;text-align:center;">本日の進行はすべて終わりました</div>';
+  return wrap(h);
+}
+/* タイムスケジュールを読む（60秒に1回まで）。読み終わったら描き直す */
+let _liveSchedBusy_=false;
+function maybeLoadLiveSched_(tour){
+  if(!tour||!tour.eventCode||_liveSchedBusy_)return;
+  const code=tour.eventCode;
+  if(S._liveSched&&S._liveSched.code===code&&Date.now()-(S._liveSched.at||0)<60000)return;
+  if(S._liveSchedTry===code&&Date.now()-(S._liveSchedTryAt||0)<60000)return;
+  _liveSchedBusy_=true;S._liveSchedTry=code;S._liveSchedTryAt=Date.now();
+  const p=(typeof sbFetchDoc==='function')?sbFetchDoc(code,'info').then(d=>(d&&d.schedule)||[]):fetchExhSchedule_(code);
+  p.then(rows=>{S._liveSched={code:code,rows:rows||[],at:Date.now()};})
+   .catch(()=>{if(!S._liveSched||S._liveSched.code!==code)S._liveSched={code:code,rows:[],at:Date.now()};})
+   .then(()=>{_liveSchedBusy_=false;if(S.phase==='setup')render();});
+}
+setInterval(()=>{
+  try{
+    if(typeof S==='undefined'||S.phase!=='setup'||!S._liveSched)return;
+    const lt=posLiveTour_();
+    if(!lt||S._liveSched.code!==lt.eventCode)return;
+    const st=liveSchedState_(lt,liveSchedItems_(S._liveSched.rows));
+    if(st.sig!==S._liveSchedSig)render();
+  }catch(e){}
+},30000);
 
 function rCourtSearch(){
   const q=S._courtSearchQuery||{teamNo:'',matchCode:''};
@@ -12207,6 +12366,7 @@ function bind(){
   // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
   /* 【2026-10-26】現在地：ホーム（受付済み）と試合システムの画面で、結果・対戦表・タイムスケジュールを読む */
   if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))maybeRefreshPos_();
+  if(S.phase==='setup'){const _lt=posLiveTour_();if(_lt)maybeLoadLiveSched_(_lt);}   // 【2026-10-26】開催中カードのタイムスケジュール
   const _pts=document.getElementById('pos-team-select');
   if(_pts)_pts.onchange=()=>{S._posTeamNo=_pts.value;render();};
   /* 【2026-10-26】トーナメント表：結果が届いた試合を読み、スコアシートがあるかを確かめる（あれば 📋 が出る） */
