@@ -1,5 +1,3 @@
-<meta name="viewport" content="width=device-width, initial-scale=1.0"><!DOCTYPE html><!DOCTYPE html><!DOCTYPE html>
-
 <!DOCTYPE html>
 <html lang="ja">
 <head>
@@ -16,8 +14,8 @@
   location.replace(u.toString());
 }catch(e){}})();
 </script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+<!-- 【2026-10-26】QRコードを読む部品。版を固定（以前は版の指定なしで、しかも2回読み込んでいた）。画像を作る部品（html2canvas）は使うときだけ読む -->
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js" type="text/javascript"></script>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
 <title>MMOSS - Mölkky Mania</title>
@@ -80,7 +78,6 @@ textarea:focus{outline:none;border-color:#35BE94;background:#fff;}
 </head>
 <body>
 <div class="app" id="app"></div>
-<script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 <script>
 // チーム色：A=水色（スカイ）系 / B=明るいイエロー系。
 // 枠線(C)・背景(LB)・枠色(LBR)・文字(LT)は必ず同じ系統で揃える（内と外でトーンをずらさない）。
@@ -183,7 +180,6 @@ let S={
   // 分からない・古いときは、最後の送信で古い形のデータも一緒に入れて送る（記録が消えないように）。
   _bgSendNote:''
 };
-function fmtSec(sec){if(sec===null||sec===undefined)return'--';const m=Math.floor(sec/60),s=sec%60;return m>0?m+'分'+s+'秒':s+'秒';}
 let _timerInterval=null;
 function startTimer(){
   S.throwStartTime=Date.now();
@@ -846,23 +842,6 @@ async function loadBracketNo(no){
   S._tiLoading=false;render();
 }
 
-// 受付データの送信／確認（試合情報と同じ tour.gasUrl 経由・キャッシュなし）
-async function callReceptionGas(action,params={}){
-  const tour=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):activeTour();
-  const fetchUrl=tour&&tour.gasUrl&&tour.gasUrl.trim();
-  if(!fetchUrl||!fetchUrl.startsWith('https://script.google.com/')){
-    throw new Error('GAS URLが設定されていません。');
-  }
-  const extra=Object.keys(params).map(k=>'&'+encodeURIComponent(k)+'='+encodeURIComponent(params[k])).join('');
-  const doFetch=async()=>{
-    const url=fetchUrl+'?action='+action+extra+'&t='+Date.now()+'_'+Math.random().toString(36).slice(2);
-    const res=await fetch(url,{mode:'cors',cache:'no-store',credentials:'omit',redirect:'follow'});
-    if(!res.ok)throw new Error('HTTP '+res.status);
-    return await res.json();
-  };
-  try{ return await doFetch(); }
-  catch(e1){ await new Promise(r=>setTimeout(r,500)); return await doFetch(); }
-}
 
 async function fetchCombinedIds(){
   const btn=document.getElementById('btn-fetch-combined');
@@ -1484,12 +1463,6 @@ function saveMyTeam(eventCode,teamId){
   map[String(eventCode||'')]={teamId:String(teamId),at:Date.now()};
   saveMyTeams_(map);
 }
-// いちばん新しく受付した1件（以前の呼び方のため残す）
-function loadMyTeam(){
-  const map=loadMyTeams_();let best=null;
-  Object.keys(map).forEach(k=>{const v=map[k];if(v&&(!best||(v.at||0)>(best.at||0)))best={eventCode:k,teamId:v.teamId,at:v.at};});
-  return best;
-}
 // eventCode を渡すと、その大会の受付だけを解除。渡さなければ全部
 function clearMyTeam(eventCode){
   if(eventCode==null||eventCode===''){saveMyTeams_({});return;}
@@ -1725,32 +1698,8 @@ async function fetchViewData(action,params={}){
   }
 }
 
-function calcRank(arr,key,desc=true){
-  // 配列の各要素にkeyの順位を付与して返す
-  const sorted=[...arr].sort((a,b)=>desc?(b[key]-a[key]):(a[key]-b[key]));
-  const rankMap={};
-  sorted.forEach((item,i)=>{
-    if(i>0&&sorted[i][key]===sorted[i-1][key]){
-      rankMap[item.teamNo||item.name+'_'+item.eventCode]=rankMap[sorted[i-1].teamNo||sorted[i-1].name+'_'+sorted[i-1].eventCode];
-    }else{
-      rankMap[item.teamNo||item.name+'_'+item.eventCode]=i+1;
-    }
-  });
-  return rankMap;
-}
 
 function pct(a,b){return b>0?Math.round(a/b*1000)/10:0;}
-function avg(a,b){return b>0?Math.round(a/b*10)/10:0;}
-function rankBadge(r){
-  const colors=['#f59e0b','#94a3b8','#b45309'];
-  const c=r<=3?colors[r-1]:'#e5e7eb';
-  const tc=r<=3?'#fff':'#374151';
-  return `<span style="display:inline-block;background:${c};color:${tc};border-radius:99px;padding:1px 7px;font-size:11px;font-weight:700;margin-left:4px;">${r}位</span>`;
-}
-function cssBar(val,max,color='#2E8B57'){
-  const w=max>0?Math.min(100,Math.round(val/max*100)):0;
-  return `<div style="background:#e5e7eb;border-radius:4px;height:8px;margin-top:4px;"><div style="background:#4FC08D;width:${w}%;height:8px;border-radius:4px;transition:width 0.3s;"></div></div>`;
-}
 
 // 成績用ドーナツ円グラフ（1マス分）。中央をくり抜いて数値・補足(◯/◯)・順位を表示する。
 //   label   : グラフ名（上に表示）
@@ -1804,46 +1753,6 @@ function resolveVenue(tour){
   // （以前は配信スナップショットを先に返していたため、テーマカラーを変えても画面に反映されなかった）
   if(local&&snap)return{...snap,...local};
   return local||snap||null;
-}
-// ===== 会場テーマカラーの利用ヘルパー =====
-// 大会の会場に設定されたテーマカラー。未設定なら fallback（既定は緑）を返す。
-function tourThemeColor(tour,fallback){
-  const v=resolveVenue(tour||activeTour());
-  return(v&&v.themeColor)?v.themeColor:(fallback||'#1D9E75');
-}
-// 色の明るさ（0〜1）。文字色を選ぶ判定に使う。
-function colorLum(hex){
-  const h=String(hex||'').replace('#','');
-  if(h.length<6)return 0;
-  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
-  if(isNaN(r)||isNaN(g)||isNaN(b))return 0;
-  return(0.299*r+0.587*g+0.114*b)/255;
-}
-// その色を背景に敷いたときに読める文字色。白と濃色の両方を比べて、
-// よりはっきり読めるほう（コントラストが高いほう）を選ぶ。
-function readableOn(hex){
-  const h=String(hex||'').replace('#','');
-  if(h.length<6)return'#fff';
-  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
-  if(isNaN(r)||isNaN(g)||isNaN(b))return'#fff';
-  const sr=v=>{v/=255;return v<=0.03928?v/12.92:Math.pow((v+0.055)/1.055,2.4);};
-  const L=0.2126*sr(r)+0.7152*sr(g)+0.0722*sr(b);
-  const vsWhite=1.05/(L+0.05);        // 白文字にしたときの読みやすさ
-  const vsDark=(L+0.05)/0.0603;       // 濃い文字(#1a1a1a)にしたときの読みやすさ
-  return vsDark>=vsWhite?'#1a1a1a':'#fff';
-}
-// 白地に文字として置くとき用。明るすぎる色は読める濃さまで暗くする。
-function textSafeColor(hex,fallback){
-  const h=String(hex||'').replace('#','');
-  if(h.length<6)return fallback||'#1D9E75';
-  let r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
-  if(isNaN(r)||isNaN(g)||isNaN(b))return fallback||'#1D9E75';
-  let guard=0;
-  while(((0.299*r+0.587*g+0.114*b)/255)>0.48&&guard<12){
-    r=Math.round(r*0.85);g=Math.round(g*0.85);b=Math.round(b*0.85);guard++;
-  }
-  const hx=v=>('0'+v.toString(16)).slice(-2);
-  return'#'+hx(r)+hx(g)+hx(b);
 }
 // 会場に「詳細」が1つでも入っているか（＝「詳細を見る」を出すか判定）
 function venueHasDetail(v){
@@ -2007,16 +1916,6 @@ function maybeRefreshLiveEvent(){
   if(waited>LIVE_MIN_INTERVAL)refreshLiveEvent();                 // ③3分経過
 }
 
-function sendRowViaImage(params){
-  return new Promise(resolve=>{
-    const url=GAS_URL+'?'+new URLSearchParams(params).toString();
-    const img=new Image();
-    img.onload=img.onerror=()=>resolve();
-    img.src=url;
-    // タイムアウト3秒
-    setTimeout(resolve,3000);
-  });
-}
 
 /* =========================================================================
    ★8-3：結果の送信を「セットごとの小分け」に変えた
@@ -3370,6 +3269,19 @@ function lockBtnSize_(b){
     b.style.boxSizing='border-box';
   }catch(e){}
 }
+/* 【2026-10-26】画像を作る部品（html2canvas）を、使うときだけ読む（ページを開くのを速くするため） */
+let _h2cP_=null;
+function ensureHtml2canvas_(){
+  if(window.html2canvas)return Promise.resolve();
+  if(!_h2cP_)_h2cP_=new Promise((res,rej)=>{
+    const sc=document.createElement('script');
+    sc.src='https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js';
+    sc.onload=()=>res();
+    sc.onerror=()=>{_h2cP_=null;rej(new Error('画像を作る部品を読み込めませんでした。通信を確かめてください。'));};
+    document.head.appendChild(sc);
+  });
+  return _h2cP_;
+}
 function rSetup(){
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
@@ -3429,21 +3341,6 @@ function rSetup(){
   const _themeSoft=_theme+'4D'; // 受付済みボックス（やや濃いめ）
   const _showVenueDetail=venueHasDetail(_venue);
 
-  // 従来の表示（配信中の大会名が無いときのフォールバック）
-  const _fallbackBlock=_my
-    ?`<div style="margin-bottom:20px;padding:14px 16px;background:#E1F5EE;border-radius:14px;display:flex;align-items:center;gap:12px;">
-        <span style="font-size:26px;">👤</span>
-        <div style="flex:1;">
-          <div style="font-size:12px;color:#0a6e57;">受付済み${isSinglesActive()?'選手':'チーム'}</div>
-          <div style="font-size:17px;font-weight:800;color:#085041;line-height:1.3;">${_myTeamObj?_myTeamObj.name:'No.'+_my.teamId}</div>
-          ${_myTeamObj?`<div style="font-size:12px;color:#0a6e57;">No.${_my.teamId}</div>`:''}
-        </div>
-        <button id="btn-clear-myteam" style="font-size:13px;font-weight:700;color:#085041;background:#fff;border:1px solid #9FE1CB;border-radius:10px;padding:8px 14px;cursor:pointer;white-space:nowrap;">解除</button>
-      </div>`
-    :`<button id="btn-go-reception" style="width:100%;padding:24px 20px;font-size:20px;font-weight:700;margin-bottom:20px;background:#FFCB3D;color:#2b2100;border:none;border-radius:14px;display:flex;align-items:center;gap:14px;cursor:pointer;">
-        <span style="font-size:32px;">📝</span>
-        <div style="text-align:left;font-size:20px;font-weight:700;">大会受付（${isSinglesActive()?'選手':'チーム'}登録）</div>
-      </button>`;
 
   // 開催中：左＝大会情報／右＝縦長の受付 or 受付済み、下＝詳細を見る
   // 表示名（displayName）があればそれを使い、改行位置で折り返す（無ければ大会名）
@@ -4535,17 +4432,6 @@ function rAdminTourEdit(){
   const ad=AD;
   const prioOpts=[['tournament','トーナメント種類を優先'],['match','試合区分を優先']];
 
-  function ruleRows(rules,prefix){
-    if(!rules||!rules.length)return'<div style="font-size:13px;color:#9ca3af;padding:6px 0;">まだ設定がありません</div>';
-    return rules.map((r,i)=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
-      <div style="flex:1;">
-        <div style="font-size:13px;font-weight:600;">${r.code} ${r.name?'/ '+r.name:''}</div>
-        <div style="font-size:12px;color:#1D9E75;">${r.fmt==='best2'?'2先':r.fmt==='best3'?'3先':'表裏'}${r.turnLimit?' 12T':''}　${r.playerMin}〜${r.playerMax>=99?'∞':r.playerMax}人</div>
-      </div>
-      <button class="btn btn-gray btn-xs admin-edit-rule" data-prefix="${prefix}" data-idx="${i}" style="padding:3px 8px;">編集</button>
-      <button class="btn btn-red-o btn-xs admin-del-rule" data-prefix="${prefix}" data-idx="${i}" style="padding:3px 8px;">削除</button>
-    </div>`).join('');
-  }
 
   // 【8-7】ここも番号順にそろえる
   const venueOpts=venuesSorted_(ad).map(({v})=>`<option value="${v.code}" ${tour.venueCode===v.code?'selected':''}>${v.code}: ${v.name}</option>`).join('');
@@ -5420,6 +5306,7 @@ async function saveScoresheet(){
   document.body.appendChild(container);
 
   try{
+    await ensureHtml2canvas_();   // 【2026-10-26】使うときだけ読む
     const canvas=await Promise.race([
       html2canvas(container,{backgroundColor:'#ffffff',scale:2,useCORS:true,logging:false,width:container.scrollWidth,height:container.scrollHeight}),
       new Promise((_,reject)=>setTimeout(()=>reject(new Error('タイムアウト（10秒）')),10000))
@@ -6917,7 +6804,6 @@ function scCollectLinks(ch,cols){
   return out;
 }
 
-function scIsConfigured(ch){return!!(ch&&((ch.columns&&ch.columns.length)||(ch.prelims&&ch.prelims.length)||ch.cornerLabel));}
 
 function renderSystemChart(ch,editable,mark){   // 【2026-10-26】mark={c,r} … 「いまここ」の印を付ける箱
   if(!ch||!ch.columns||!ch.columns.length){
@@ -8489,40 +8375,26 @@ function exhTimeFromSchedule_(rows,gameName){
    この画面は参加者が申し込むときに開くだけで、ずっと見張ってはいないので、
    ①を使っても回数をほとんど使わない。時間のずれをすぐ反映したいので①を優先する。 */
 let _exhSchedCache_={code:'',at:0,rows:null};
+/* 【2026-10-26】タイムスケジュール（大会情報 info の schedule）は、ここ1か所で読む（Supabase）。
+   ホームの表・現在地・交流戦の時間が、同じ読み込みを使う（60秒は読み直さない。読んでいる最中なら、その結果を待つ）。
+   以前は交流戦の時間を GitHub（1時間60回までの窓口）から読み、ホームの表と現在地もそれぞれ別に読んでいた。 */
+let _evSched_={code:'',at:0,rows:null,busy:null};
+function fetchEventSched_(code){
+  const fc=String(code||'');
+  if(!fc)return Promise.resolve([]);
+  if(_evSched_.code===fc&&_evSched_.rows&&(Date.now()-_evSched_.at)<60000)return Promise.resolve(_evSched_.rows);
+  if(_evSched_.code===fc&&_evSched_.busy)return _evSched_.busy;
+  const pr=sbFetchDoc(fc,'info').then(d=>{
+    const rows=(d&&d.schedule)||[];
+    _evSched_={code:fc,at:Date.now(),rows:rows,busy:null};
+    return rows;
+  }).catch(e=>{if(_evSched_.busy===pr)_evSched_.busy=null;throw e;});
+  _evSched_={code:fc,at:_evSched_.code===fc?_evSched_.at:0,rows:_evSched_.code===fc?_evSched_.rows:null,busy:pr};
+  return pr;
+}
+// 交流戦の時間（以前の名前のまま残す）
 async function fetchExhSchedule_(code){
-  if(!code)return [];
-  const fc=toJsonFileCode(code);
-  if(_exhSchedCache_.code===fc&&_exhSchedCache_.rows&&(Date.now()-_exhSchedCache_.at)<EXH_SCHED_TTL){
-    return _exhSchedCache_.rows;
-  }
-  const fileName=fc+'_info.json';
-  // ① 速い道
-  try{
-    const res=await fetch(GITHUB_DATA_BASE+'/'+fileName+'?t='+Date.now(),
-      {cache:'no-store',headers:{'Accept':'application/vnd.github.v3+json'}});
-    if(res.ok){
-      const api=await res.json();
-      const b64=String(api.content||'').replace(/\s/g,'');
-      const bin=atob(b64);
-      const bytes=new Uint8Array(bin.length);
-      for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-      const d=JSON.parse(new TextDecoder('utf-8').decode(bytes));
-      const rows=(d&&d.schedule)||[];
-      _exhSchedCache_={code:fc,at:Date.now(),rows:rows};
-      return rows;
-    }
-  }catch(e){}
-  // ② 控えの道
-  try{
-    const res2=await fetch(GITHUB_RAW_BASE+'/'+fileName+'?t='+Date.now(),{cache:'no-store'});
-    if(res2.ok){
-      const d2=await res2.json();
-      const rows2=(d2&&d2.schedule)||[];
-      _exhSchedCache_={code:fc,at:Date.now(),rows:rows2};
-      return rows2;
-    }
-  }catch(e){}
-  return [];
+  try{return await fetchEventSched_(code);}catch(e){return [];}
 }
 
 /* 交流戦の画面を開いたときに、1回だけ読みにいく。
@@ -8573,32 +8445,24 @@ async function fetchExhibitionOpen_(code){
        ・行がある     → それを使う（GitHub は見ない）
        ・行が無い     → まだ古い GAS の大会。下の GitHub を見る（今までどおり）
        ・通信に失敗   → 下の GitHub を見る */
-  try{
+  /* 【2026-10-26】Supabase の exhibition_state だけを見る（GitHub の予備の道は外した。
+       対戦表の GAS が、受付の開始／終了のたびにここへ書くようになったため）。
+       ・行がある → それを使う
+       ・行が無い → まだ一度も受付を開始していない大会（＝受付中の交流戦なし。確かめられたので ok:true）
+       ・通信に失敗 → 1回だけやり直し、だめなら「確認できませんでした」 */
+  const read=async()=>{
     const res=await fetch(SB_URL+'/rest/v1/exhibition_state?event_code=eq.'+encodeURIComponent(toJsonFileCode(code))+'&select=games,times&limit=1',
       {cache:'no-store',headers:sbHeaders()});
-    if(res.ok){
-      const rows=await res.json();
-      if(rows&&rows.length)return exhParseOpenJson_({games:rows[0].games||{},times:rows[0].times||{}});
-    }
-  }catch(e){}
-  const read=async()=>{
-    const res=await fetch(GITHUB_DATA_BASE+'/'+fileName+'?t='+Date.now(),
-      {cache:'no-store',headers:{'Accept':'application/vnd.github.v3+json'}});
-    // まだ一度も受付を開始していない大会。これは「確かめられた」ので ok:true
-    if(res.status===404)return exhParseOpenJson_(null);
     if(!res.ok)throw new Error('HTTP '+res.status);
-    const api=await res.json();
-    const b64=String(api.content||'').replace(/\s/g,'');
-    const bin=atob(b64);
-    const bytes=new Uint8Array(bin.length);
-    for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
-    return exhParseOpenJson_(JSON.parse(new TextDecoder('utf-8').decode(bytes)));
+    const rows=await res.json();
+    if(rows&&rows.length)return exhParseOpenJson_({games:rows[0].games||{},times:rows[0].times||{}});
+    return exhParseOpenJson_(null);
   };
   try{ return await read(); }
   catch(e1){
-    await new Promise(r=>setTimeout(r,500));          // 1回だけやり直す
+    await new Promise(r=>setTimeout(r,500));
     try{ return await read(); }
-    catch(e2){ return {ok:false,games:{},anyOpen:false}; }   // ★確かめられなかった
+    catch(e2){ return {ok:false,anyOpen:false,games:{},times:{},hasTimes:false}; }
   }
 }
 
@@ -9543,9 +9407,7 @@ function maybeRefreshPos_(){
   const rk=code+'|'+pad3s_(team);   // 大会とチームの組み合わせごとに読む
   if(_posBusy_||(S._posCode===rk&&Date.now()-(S._posAt||0)<60000))return;
   _posBusy_=true;S._posCode=rk;S._posAt=Date.now();
-  const sch=(typeof sbFetchDoc==='function')
-    ?sbFetchDoc(code,'info').then(d=>(d&&d.schedule)||[])
-    :fetchExhSchedule_(code);
+  const sch=fetchEventSched_(code);   // 【2026-10-26】ホームの表と同じ読み込みを使う
   Promise.all([
     syncMatchesFromGitHub(code).catch(()=>{}),
     loadPosResults_(tour,team).catch(()=>{}),   // 【2026-10-26】そのチームの結果だけ
@@ -9637,7 +9499,7 @@ function maybeLoadLiveSched_(tour){
   if(S._liveSched&&S._liveSched.code===code&&Date.now()-(S._liveSched.at||0)<60000)return;
   if(S._liveSchedTry===code&&Date.now()-(S._liveSchedTryAt||0)<60000)return;
   _liveSchedBusy_=true;S._liveSchedTry=code;S._liveSchedTryAt=Date.now();
-  const p=(typeof sbFetchDoc==='function')?sbFetchDoc(code,'info').then(d=>(d&&d.schedule)||[]):fetchExhSchedule_(code);
+  const p=fetchEventSched_(code);   // 【2026-10-26】現在地と同じ読み込みを使う
   p.then(rows=>{S._liveSched={code:code,rows:rows||[],at:Date.now()};})
    .catch(()=>{if(!S._liveSched||S._liveSched.code!==code)S._liveSched={code:code,rows:[],at:Date.now()};})
    .then(()=>{_liveSchedBusy_=false;if(S.phase==='setup')render();});
