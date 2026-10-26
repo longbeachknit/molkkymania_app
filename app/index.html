@@ -3232,19 +3232,20 @@ function rBeginner(){
 /* 【8-7】大会カードの中のボタン。開催中の大会でも、開催前（次）の大会でも同じものを出す。
    どのカードのボタンかは data-evcode（その大会のコード）で見分ける。
    「対戦相手を検索」だけ横長（左右の幅を結合）にして、一番下に置く。 */
-function eventCardBtnsHtml(tour,theme){
+function eventCardBtnsHtml(tour,theme,opts){
+  const live=!!(opts&&opts.live);   // 開催中のカード：「対戦相手・コートを検索」は上の試合ボタンの並びにあるので出さない
   const code=String((tour&&tour.eventCode)||'');
   const w=isSinglesTour(tour)?'選手':'チーム';
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const b=(cls,label,wide)=>`<button class="${cls}" data-evcode="${esc(code)}" style="${wide?'grid-column:1 / -1;':''}padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">${label}</button>`;
-  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:${live?8:12}px;">
     ${b('card-btn-venue','📍 会場の詳細')}
     ${b('card-btn-tourinfo','📋 大会の詳細')}
     ${b('card-btn-schedule','🕐 タイムスケジュール')}
     ${b('card-btn-regulation','📜 レギュレーション')}
     ${b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
     ${b('card-btn-sheet','📑 大会スプレッドシート')}
-    ${b('card-btn-opponent','🔍 対戦相手・コートを検索',true)}
+    ${live?'':b('card-btn-opponent','🔍 対戦相手・コートを検索',true)}
   </div>`;
 }
 
@@ -3253,19 +3254,22 @@ function eventCardBtnsHtml(tour,theme){
    ボタンの id は前と同じなので、押したときの動きは変わらない。
    ※「対戦コートを検索」は「送信済みの試合を確認」に名前を変えた（中身は準備中）。
      対戦コートは、カードの「対戦相手・コートを検索」から探せる。 */
-function liveMatchBtnsHtml(){
-  const b=(id,icon,label)=>`<button id="${id}" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">${icon}</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">${label}</div>
-      </button>`;
-  return`<div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin:14px 0 8px;border-left:3px solid #FFB800;padding-left:7px;">試合</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-      ${b('btn-go-matchid','📷','QRコードで<br>試合開始')}
-      ${b('btn-go-result-only','📤','試合結果のみ<br>を送信')}
-      ${b('btn-go-prelim','🏅','予選結果<br>を確認')}
-      ${b('btn-go-remaining','📊','残り試合数<br>を確認')}
-      ${b('btn-go-bracket','🏆','トーナメント表')}
-      ${b('btn-go-court-search','📨','送信済みの試合<br>を確認')}
+function liveMatchBtnsHtml(tour,theme){
+  /* 【2026-10-26】見た目を「会場の詳細」などのボタンとそろえた（白地・大会の色の枠）。
+     よく使う3つ（QRコードで試合開始・試合結果のみを送信・対戦相手・コートを検索）は横いっぱいにして上に置く。
+     「対戦相手・コートを検索」は下の詳細ボタンの並びから、ここへ移した。 */
+  const code=String((tour&&tour.eventCode)||'');
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const st=wide=>`${wide?'grid-column:1 / -1;':''}padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${theme};border-radius:10px;color:#1a1a1a;cursor:pointer;`;
+  const b=(id,label,wide)=>`<button id="${id}" style="${st(wide)}">${label}</button>`;
+  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+      ${b('btn-go-matchid','📷 QRコードで試合開始',true)}
+      ${b('btn-go-result-only','📤 試合結果のみを送信',true)}
+      <button class="card-btn-opponent" data-evcode="${esc(code)}" style="${st(true)}">🔍 対戦相手・コートを検索</button>
+      ${b('btn-go-prelim','🏅 予選結果を確認')}
+      ${b('btn-go-remaining','📊 残り試合数を確認')}
+      ${b('btn-go-bracket','🏆 トーナメント表')}
+      ${b('btn-go-court-search','📨 送信済みの試合を確認')}
     </div>`;
 }
 
@@ -3369,8 +3373,8 @@ function rSetup(){
       </div>
       ${_rightSide}
     </div>
-    ${liveMatchBtnsHtml()}
-    ${eventCardBtnsHtml(_liveTour,_theme)}
+    ${liveMatchBtnsHtml(_liveTour,_theme)}
+    ${eventCardBtnsHtml(_liveTour,_theme,{live:true})}
     ${_exhBtn}
   </div>`;
 
@@ -4460,7 +4464,7 @@ function rAdminTourEdit(){
           <input type="text" id="te-code" value="${tour.eventCode}" placeholder="例: 0601"/>
           <div id="te-code-status" style="font-size:12px;margin-top:5px;min-height:16px;"></div></div>
         <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">大会名</div>
-          <input type="text" id="te-name" value="${tour.eventName}" placeholder="例: 6月川崎大会"/></div>
+          <input type="text" id="te-name" value="${tour.eventName}" placeholder="例: Mölkky Mania 〇〇 -OPEN-"/></div>
         <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">表示名（ホームのカード用・改行できます／空欄なら大会名を表示）</div>
           <textarea id="te-display-name" rows="3" placeholder="例:&#10;モルックマニア&#10;大阪オープン&#10;シーズン1-4" style="width:100%;">${(tour.displayName||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}</textarea>
           <div style="font-size:11px;color:#9ca3af;margin-top:3px;">改行したい位置で「Enter（改行）」を押してください。</div></div>
@@ -4498,31 +4502,6 @@ function rAdminTourEdit(){
             <option value="singles" ${isSinglesTour(tour)?'selected':''}>シングルス（1人で出る）</option>
           </select>
         </div>
-        <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
-          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏆 トーナメント表の設定</div>
-          <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">トーナメントは2つまで設定できます。<b>トーナメント①</b>はスプレッドシートの「決勝T送信」シートから、<b>トーナメント②</b>は「Bトーナメント送信」シートから配信されたものが表示されます。<br>トーナメントが1つだけの大会は、②を「なし」にしてください。参加者のアプリでは「トーナメント表」を押したときに、どちらを見るか選ぶ画面が出ます（②が「なし」のときは今までどおり、そのまま表が開きます）。<br>チーム数を選ぶと、表の形（ラウンド数・シードの有無）が自動で切り替わります。24・48チームでは上位チームが1回戦免除（シード）になります。</div>
-          <div style="background:#f9fafb;border-radius:8px;padding:10px;margin-bottom:8px;">
-            <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント①（決勝トーナメント）</div>
-            <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
-            <input type="text" id="te-bracket1-name" value="${(tour.bracket1Name||'決勝トーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="決勝トーナメント" style="font-size:14px;"/>
-            <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
-            <select id="te-bracket-count" style="font-size:14px;">
-              ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
-            </select>
-          </div>
-          <div style="background:#f9fafb;border-radius:8px;padding:10px;">
-            <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント②（Bトーナメント）</div>
-            <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
-            <input type="text" id="te-bracket2-name" value="${(tour.bracket2Name||'Bトーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="Bトーナメント" style="font-size:14px;"/>
-            <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
-            <select id="te-bracket2-count" style="font-size:14px;">
-              <option value="0" ${Number(tour.bracket2TeamCount||0)>0?'':'selected'}>なし（トーナメントは1つだけ）</option>
-              ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracket2TeamCount||0)===n?'selected':''}>${n}チーム</option>`).join('')}
-            </select>
-          </div>
-        </div>
-        ${exhEditorHtml(tour)}
-        ${advanceEditorHtml(tour)}
       </div>
       <div style="font-size:11px;color:#9ca3af;margin-top:10px;">入力内容は自動で保存されます。「保存して戻る」を押すと全端末に配信されます。</div>
     </div>
@@ -4536,10 +4515,36 @@ function rAdminTourEdit(){
           <button class="btn btn-gray btn-xs" id="btn-save-rule-tpl" style="flex:1;padding:8px;">保存</button>
           <button class="btn btn-gray btn-xs" id="btn-manage-rule-tpl" style="flex:1;padding:8px;">管理</button>
         </div>
-        <div style="font-size:11px;color:#6b7280;margin-top:6px;">優先ルール・試合区分・トーナメント種類・ラウンド名をまとめて保存／呼び出しできます</div>
+        <div style="font-size:11px;color:#6b7280;margin-top:6px;">優先ルール・試合区分・トーナメント種類・ラウンド名と、トーナメント表・交流戦・予選順位による進出先の設定をまとめて保存／呼び出しできます。<br>ほかの端末へは「管理」→「📤 ファイルに書き出す」で渡せます</div>
       </div>
       ${priorityToggleHtml(tour.priority)}
       ${ruleCardsHtml(tour)}
+      <!-- 【2026-10-26】トーナメント表・交流戦・進出先の設定は、基本情報からここ（大会ルール設定の一番下）へ移した -->
+      <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
+        <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏆 トーナメント表の設定</div>
+        <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">トーナメントは2つまで設定できます。<b>トーナメント①</b>はスプレッドシートの「決勝T送信」シートから、<b>トーナメント②</b>は「Bトーナメント送信」シートから配信されたものが表示されます。<br>トーナメントが1つだけの大会は、②を「なし」にしてください。参加者のアプリでは「トーナメント表」を押したときに、どちらを見るか選ぶ画面が出ます（②が「なし」のときは今までどおり、そのまま表が開きます）。<br>チーム数を選ぶと、表の形（ラウンド数・シードの有無）が自動で切り替わります。24・48チームでは上位チームが1回戦免除（シード）になります。</div>
+        <div style="background:#f9fafb;border-radius:8px;padding:10px;margin-bottom:8px;">
+          <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント①（決勝トーナメント）</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
+          <input type="text" id="te-bracket1-name" value="${(tour.bracket1Name||'決勝トーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="決勝トーナメント" style="font-size:14px;"/>
+          <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
+          <select id="te-bracket-count" style="font-size:14px;">
+            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
+          </select>
+        </div>
+        <div style="background:#f9fafb;border-radius:8px;padding:10px;">
+          <div style="font-size:12px;font-weight:700;color:#111;margin-bottom:8px;">トーナメント②（Bトーナメント）</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">アプリでの表示名</div>
+          <input type="text" id="te-bracket2-name" value="${(tour.bracket2Name||'Bトーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="Bトーナメント" style="font-size:14px;"/>
+          <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
+          <select id="te-bracket2-count" style="font-size:14px;">
+            <option value="0" ${Number(tour.bracket2TeamCount||0)>0?'':'selected'}>なし（トーナメントは1つだけ）</option>
+            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracket2TeamCount||0)===n?'selected':''}>${n}チーム</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      ${exhEditorHtml(tour)}
+      ${advanceEditorHtml(tour)}
     </div>
 
     <div class="card" style="padding:14px;margin-bottom:12px;">
@@ -5650,6 +5655,63 @@ function rScoreView(){
 }
 
 // ===== ルールテンプレート =====
+/* 【2026-10-26】テンプレートに一緒に入れる設定。
+   トーナメント表の設定・交流戦の参加申請・予選順位による進出先を「大会ルール設定」の中へ移したので、
+   テンプレートにも一緒に保存・読み込みする。
+   この設定が入っていない古いテンプレートを読み込んだときは、大会の今の設定をそのまま残す。 */
+const TPL_EXTRA_KEYS_=['bracket1Name','bracketTeamCount','bracket2Name','bracket2TeamCount','exhibition','advanceRules'];
+function tplExtrasFromTour_(tour){
+  const o={};
+  TPL_EXTRA_KEYS_.forEach(k=>{if(tour&&tour[k]!==undefined&&tour[k]!==null)o[k]=JSON.parse(JSON.stringify(tour[k]));});
+  return o;
+}
+function applyTplExtras_(tour,tpl){
+  TPL_EXTRA_KEYS_.forEach(k=>{if(tpl&&tpl[k]!==undefined&&tpl[k]!==null)tour[k]=JSON.parse(JSON.stringify(tpl[k]));});
+}
+/* 【2026-10-26】テンプレートをファイルに書き出す／ファイルから読み込む。
+   テンプレートはその端末の中にしか保存されないので、ほかの端末やほかのアプリ
+   （ブラウザアプリ 8-7〜 ⇄ ストアアプリ 1-6〜）へは、このファイルで渡す。
+   ファイルの形は JSON（中身が入れ子になっているので CSV では表せないため）。 */
+function exportRuleTemplates_(){
+  const tpls=AD.ruleTemplates||[];
+  if(!tpls.length){alert('書き出すテンプレートがありません。');return;}
+  const body=JSON.stringify({kind:'mmoss-rule-templates',version:1,exportedAt:new Date().toISOString(),templates:tpls},null,2);
+  const d=new Date(),p=n=>String(n).padStart(2,'0');
+  const name='MMOSS_試合設定テンプレート_'+d.getFullYear()+p(d.getMonth()+1)+p(d.getDate())+'_'+p(d.getHours())+p(d.getMinutes())+'.json';
+  try{
+    const blob=new Blob([body],{type:'application/json'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;
+    document.body.appendChild(a);a.click();
+    setTimeout(()=>{try{URL.revokeObjectURL(a.href);a.remove();}catch(e){}},1500);
+    alert('✅ '+tpls.length+'件のテンプレートを書き出しました。\nファイル名：'+name+'\n\n別の端末（またはもう一方のアプリ）の「テンプレート管理」→「📥 ファイルから読み込む」で、このファイルを選んでください。');
+  }catch(e){alert('書き出せませんでした：'+e);}
+}
+function importRuleTemplates_(){
+  const inp=document.createElement('input');
+  inp.type='file';inp.accept='.json,application/json,text/plain';
+  inp.onchange=async(e)=>{
+    const file=e.target.files[0];if(!file)return;
+    let data=null;
+    try{data=JSON.parse(await file.text());}catch(err){}
+    const list=Array.isArray(data)?data:(data&&Array.isArray(data.templates)?data.templates:(data&&typeof data==='object'?[data]:[]));
+    const ok=list.filter(t=>t&&typeof t==='object'&&(Array.isArray(t.matchRules)||Array.isArray(t.tourneyRules)||Array.isArray(t.roundRules)));
+    if(!ok.length){alert('テンプレートが見つかりませんでした。\n「📤 ファイルに書き出す」で作ったファイルを選んでください。');return;}
+    const names=ok.slice(0,15).map(t=>'・'+(t.name||'（名称未設定）')).join('\n')+(ok.length>15?'\n…ほか'+(ok.length-15)+'件':'');
+    if(!confirm(ok.length+'件のテンプレートを読み込みます。\n\n'+names+'\n\n前に同じファイルから読み込んだテンプレートがあれば、新しい内容で上書きします。\nよろしいですか？'))return;
+    if(!AD.ruleTemplates)AD.ruleTemplates=[];
+    let added=0,replaced=0;
+    ok.forEach((t,i)=>{
+      const c=JSON.parse(JSON.stringify(t));
+      if(!c.name)c.name='（名称未設定）';
+      const at=c.id?AD.ruleTemplates.findIndex(x=>x.id===c.id):-1;
+      if(at>=0){AD.ruleTemplates[at]=c;replaced++;}
+      else{if(!c.id)c.id='tpl_'+Date.now()+'_'+i;AD.ruleTemplates.push(c);added++;}
+    });
+    saveAdmin(AD);render();
+    alert('✅ 読み込みました（新しく追加 '+added+'件／上書き '+replaced+'件）');
+  };
+  inp.click();
+}
 // テンプレート管理画面（一覧・新規作成・編集・コピー・削除）
 function rTplManage(){
   const tpls=AD.ruleTemplates||[];
@@ -5674,6 +5736,14 @@ function rTplManage(){
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">優先ルール・試合区分・トーナメント種類・ラウンド名をまとめて保存します</div>
       ${listHtml}
+    </div>
+    <div class="card" style="padding:14px;margin-bottom:12px;">
+      <div style="font-size:14px;font-weight:600;color:#111;margin-bottom:6px;">📁 ほかの端末・ほかのアプリと共有</div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">テンプレートは、この端末の中にだけ保存されています。<br>「書き出す」でファイルにして、別の端末（またはブラウザアプリ⇄ストアアプリ）の「ファイルから読み込む」で取り込めます。</div>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-blue btn-xs" id="btn-tplm-export" style="flex:1;padding:9px;">📤 ファイルに書き出す</button>
+        <button class="btn btn-gray btn-xs" id="btn-tplm-import" style="flex:1;padding:9px;">📥 ファイルから読み込む</button>
+      </div>
     </div>
   </div>`;
 }
@@ -5732,6 +5802,7 @@ function showLoadRuleTemplateModal(){
       tour.tourneyRules=JSON.parse(JSON.stringify(tpl.tourneyRules||[]));
       tour.roundRules=JSON.parse(JSON.stringify(tpl.roundRules||[]));
       if(tpl.systemChart)tour.systemChart=JSON.parse(JSON.stringify(tpl.systemChart));
+      applyTplExtras_(tour,tpl);   // 【2026-10-26】トーナメント表・交流戦・予選順位による進出先の設定（入っているテンプレートだけ）
       saveActiveTour(tour);
       document.body.removeChild(overlay);
       render();
@@ -5749,7 +5820,7 @@ function showSaveRuleTemplateModal(){
     <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">テンプレート名</div>
       <input type="text" id="tpl-name" placeholder="例: 川崎標準ルール" style="font-size:15px;"/>
     </div>
-    <div style="font-size:12px;color:#6b7280;margin-top:8px;">優先ルール・試合区分・トーナメント種類・ラウンド名の4項目を保存します</div>
+    <div style="font-size:12px;color:#6b7280;margin-top:8px;">優先ルール・試合区分・トーナメント種類・ラウンド名と、トーナメント表・交流戦・予選順位による進出先の設定を保存します</div>
     <div style="display:flex;gap:8px;margin-top:14px;">
       <button id="tpl-cancel" class="btn btn-gray" style="flex:1;">キャンセル</button>
       <button id="tpl-save" class="btn btn-green" style="flex:2;">保存する</button>
@@ -5772,6 +5843,7 @@ function showSaveRuleTemplateModal(){
       roundRules:JSON.parse(JSON.stringify(tour.roundRules||[])),
       systemChart:tour.systemChart?JSON.parse(JSON.stringify(tour.systemChart)):null
     };
+    Object.assign(tpl,tplExtrasFromTour_(tour));   // 【2026-10-26】トーナメント表・交流戦・予選順位による進出先の設定も一緒に
     if(!AD.ruleTemplates)AD.ruleTemplates=[];
     AD.ruleTemplates.push(tpl);
     saveAdmin(AD);
@@ -10758,6 +10830,8 @@ function bind(){
 
   // ===== テンプレート管理画面 =====
   const btmBack=document.getElementById('btn-tplm-back');if(btmBack)btmBack.onclick=()=>{S._tplManage=false;render();};
+  const btmExp=document.getElementById('btn-tplm-export');if(btmExp)btmExp.onclick=()=>exportRuleTemplates_();
+  const btmImp=document.getElementById('btn-tplm-import');if(btmImp)btmImp.onclick=()=>importRuleTemplates_();
   const btmNew=document.getElementById('btn-tplm-new');if(btmNew)btmNew.onclick=()=>{
     const tpl={id:'tpl_'+Date.now(),name:'新しいテンプレート',priority:'tournament',matchRules:[],tourneyRules:[],roundRules:[]};
     if(!AD.ruleTemplates)AD.ruleTemplates=[];
