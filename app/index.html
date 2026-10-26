@@ -3254,7 +3254,7 @@ function eventCardBtnsHtml(tour,theme,opts){
    ボタンの id は前と同じなので、押したときの動きは変わらない。
    ※「対戦コートを検索」は「送信済みの試合を確認」に名前を変えた（中身は準備中）。
      対戦コートは、カードの「対戦相手・コートを検索」から探せる。 */
-function liveMatchBtnsHtml(tour,theme,extra){
+function liveMatchBtnsHtml(tour,theme,extra,pos){
   /* 【2026-10-26】見た目を「会場の詳細」などのボタンとそろえた（白地・大会の色の枠）。
      よく使う3つ（QRコードで試合開始・試合結果のみを送信・対戦相手・コートを検索）は横いっぱいにして上に置く。
      「対戦相手・コートを検索」は下の詳細ボタンの並びから、ここへ移した。 */
@@ -3263,6 +3263,7 @@ function liveMatchBtnsHtml(tour,theme,extra){
   const st=wide=>`${wide?'grid-column:1 / -1;':''}padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${theme};border-radius:10px;color:#1a1a1a;cursor:pointer;`;
   const b=(id,label,wide)=>`<button id="${id}" style="${st(wide)}">${label}</button>`;
   return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;">
+      ${pos||''}
       ${b('btn-go-matchid','📷 QRコードで試合開始',true)}
       ${b('btn-go-result-only','📤 試合結果のみを送信',true)}
       <button class="card-btn-opponent" data-evcode="${esc(code)}" style="${st(true)}">🔍 対戦相手・コートを検索</button>
@@ -3374,7 +3375,7 @@ function rSetup(){
       </div>
       ${_rightSide}
     </div>
-    ${liveMatchBtnsHtml(_liveTour,_theme,eventCardBtnsHtml(_liveTour,_theme,{live:true}))}
+    ${liveMatchBtnsHtml(_liveTour,_theme,eventCardBtnsHtml(_liveTour,_theme,{live:true}),_my?posBoxHtml_(_liveTour,_my.teamId,_theme,true):'')}
     ${_exhBtn}
   </div>`;
 
@@ -6818,7 +6819,7 @@ function scCollectLinks(ch,cols){
 
 function scIsConfigured(ch){return!!(ch&&((ch.columns&&ch.columns.length)||(ch.prelims&&ch.prelims.length)||ch.cornerLabel));}
 
-function renderSystemChart(ch,editable){
+function renderSystemChart(ch,editable,mark){   // 【2026-10-26】mark={c,r} … 「いまここ」の印を付ける箱
   if(!ch||!ch.columns||!ch.columns.length){
     return'<div style="font-size:13px;color:#9ca3af;padding:24px 12px;text-align:center;">試合システム図はまだ設定されていません。<br>管理者画面の「大会設定」または「ルールテンプレート」で登録してください。</div>';
   }
@@ -6896,7 +6897,8 @@ function renderSystemChart(ch,editable){
         const cc=scCellData(ch,cols[c],r);
         const ed=editable?` class="sc-box" data-c="${c}" data-r="${r}" title="タップすると「負けたチームの行き先」を選べます"`:'';
         const cur=editable?'cursor:pointer;':'';
-        h+=`<td data-cell="${c},${r}"${ed} style="${cur}background:${cc.bg};border:1px solid ${cc.bd};color:${cc.tx};text-align:center;padding:7px 3px;font-weight:600;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.25;">${scEsc(cellOf(c,r))}</td>`;
+        const _mk=!!(mark&&mark.c===c&&mark.r===r);
+        h+=`<td data-cell="${c},${r}"${ed} style="${_mk?'outline:3px solid #f59e0b;outline-offset:1px;':''}${cur}background:${cc.bg};border:1px solid ${cc.bd};color:${cc.tx};text-align:center;padding:7px 3px;font-weight:600;white-space:normal;word-break:break-word;overflow-wrap:anywhere;line-height:1.25;">${_mk?'<div style="font-size:9px;font-weight:800;color:#b45309;">いまここ</div>':''}${scEsc(cellOf(c,r))}</td>`;
       }else{
         h+=`<td data-cell="${c},${r}"></td>`;
       }
@@ -7594,7 +7596,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">📍 会場のご案内</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">会場のご案内</div>
       </div>
       ${!hasAny
         ? `<div style="text-align:center;padding:32px;color:#9ca3af;font-size:14px;">会場の詳細はまだ登録されていません。</div>`
@@ -7639,7 +7641,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">📋 大会の詳細</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">大会の詳細</div>
       </div>
       ${!hasAny
         ? `<div style="text-align:center;padding:32px;color:#9ca3af;font-size:14px;">大会の詳細はまだ登録されていません。</div>`
@@ -7658,7 +7660,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🕐 タイムスケジュール</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">タイムスケジュール</div>
       </div>
       ${loading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
       :err?`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`
@@ -7718,7 +7720,6 @@ function rTournamentInfo(){
     const c1=Number(ptour&&ptour.bracketTeamCount)||64;
     const c2=Number(ptour&&ptour.bracket2TeamCount)||0;
     const card=(id,icon,name,count)=>`<button id="${id}" style="width:100%;padding:18px 16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
-        <span style="font-size:28px;">${icon}</span>
         <div style="flex:1;min-width:0;">
           <div style="font-size:16px;font-weight:700;color:#111;">${esc(name)}</div>
           <div style="font-size:12px;color:#6b7280;margin-top:3px;">${count?count+'チーム':''}</div>
@@ -7728,7 +7729,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🏆 トーナメント表</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">トーナメント表</div>
       </div>
       ${S._tiLoading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
       :`<div style="font-size:13px;color:#6b7280;margin-bottom:14px;">どちらのトーナメント表を見ますか？</div>
@@ -7952,13 +7953,13 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:820px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="${_hasB2?'btn-ti-bracket-back':'btn-ti-sub-back'}" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🏆 ${esc(_bName)}表</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">${esc(_bName)}表</div>
       </div>
       ${loading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
       :err?`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`
       :rawRounds.length===0?`<div style="text-align:center;padding:32px;color:#9ca3af;">まだ配信されていません</div>`
       :`<div style="text-align:center;margin-bottom:10px;">
-          <div style="font-size:12px;color:#92400e;font-weight:700;">🏆 優勝</div>
+          <div style="font-size:12px;color:#92400e;font-weight:700;">優勝</div>
           <div style="font-size:20px;font-weight:800;color:#b45309;margin-top:2px;min-height:26px;">${champion?esc(champion):'<span style=\"color:#d1d5db;font-size:14px;\">未確定</span>'}</div>
           <div style="font-size:11px;color:#9ca3af;margin-top:4px;">${seedNote}</div>
         </div>
@@ -7995,7 +7996,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">📜 レギュレーション</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">レギュレーション</div>
       </div>
       <div style="margin-bottom:22px;">
         <div style="font-size:16px;font-weight:700;color:#111;margin-bottom:8px;padding-bottom:6px;border-bottom:2px solid #e5e7eb;">試合システム</div>
@@ -8053,7 +8054,7 @@ function rTournamentInfo(){
          ボタンで開け閉めする。 */
     const rankOpen=!!S._tiPrelimRankOpen;
     const prelimRankBtn=(!loading&&!err&&teams.length)
-      ?`<button id="btn-prelim-rank" style="width:100%;padding:12px;margin-bottom:16px;font-size:14px;font-weight:800;background:#FFCB3D;color:#2b2100;border:1.5px solid #FFCB3D;border-radius:12px;cursor:pointer;">🏆 予選のランキングを確認</button>`:'';
+      ?`<button id="btn-prelim-rank" style="width:100%;padding:12px;margin-bottom:16px;font-size:14px;font-weight:800;background:#FFCB3D;color:#2b2100;border:1.5px solid #FFCB3D;border-radius:12px;cursor:pointer;">予選のランキングを確認</button>`:'';
     const prelimRankTable=(rankOpen&&teams.length)?(()=>{
       /* 【8-8】予選のランキング。罫線付きの表で、
            順位（暫定）・No・名前・総セット・勝利・引き分け・合計点 の順。
@@ -8104,8 +8105,8 @@ function rTournamentInfo(){
          確定の印は、対戦表の「予選結果を確定させる」で配信される（confirmed）。 */
     const prelimNotice=(!loading&&!err&&teams.length)
       ?(S._tiPrelimConfirmed===true
-        ?`<div style="background:#E1F5EE;border:1.5px solid #9FE1CB;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#085041;font-weight:700;line-height:1.6;">✅ 予選結果が確定しました。<br><span style="font-weight:600;">これ以降の修正は受け付けられません。</span></div>`
-        :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">⚠️ 予選結果は暫定のものです。${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合</div>`:''}</div>`)
+        ?`<div style="background:#E1F5EE;border:1.5px solid #9FE1CB;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#085041;font-weight:700;line-height:1.6;">予選成績が確定しました。<br><span style="font-weight:600;">これ以降の修正は受け付けられません。</span></div>`
+        :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">予選成績は暫定のものです。${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合</div>`:''}</div>`)
       :'';
 
     /* 【2026-10-26】予選のランキングは、折り返しではなく新しい画面で出す */
@@ -8113,7 +8114,7 @@ function rTournamentInfo(){
       return`<div style="padding:16px;max-width:480px;margin:0 auto;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
           <button id="btn-prelim-rank-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-          <div style="font-size:17px;font-weight:700;color:#111;">🏆 予選のランキング</div>
+          <div style="font-size:17px;font-weight:700;color:#111;">予選のランキング</div>
         </div>
         ${prelimNotice}
         ${prelimRankTable}
@@ -8201,7 +8202,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🏅 予選結果</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">予選成績</div>
       </div>
       ${prelimNotice}
       ${searchBox}
@@ -8216,7 +8217,7 @@ function rTournamentInfo(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🪪 ${wTeam(tour||null)}Noを検索</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">${wTeam(tour||null)}Noを検索</div>
       </div>
       <div style="margin-bottom:12px;">
         <input type="text" id="ts-input" value="${q}" placeholder="${wTeam(tour||null)}名のキーワードを入力"
@@ -8231,15 +8232,25 @@ function rTournamentInfo(){
     const loading=S._tiLoading;
     const err=S._tiError;
     const chart=tour?tour.systemChart:null;
+    /* 【2026-10-26】チームの現在地。受付済みなら自分のチーム、ほかのチームも選べる */
+    const _pMy=tour?getValidMyTeam(tour.eventCode):null;
+    const _pNo=S._posTeamNo||(_pMy?String(_pMy.teamId):'');
+    const _pTeams=((tour&&tour.teams)||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
+    const _pPos=(_pNo&&tour&&S._posReady===tour.eventCode)?teamPosition_(tour,_pNo,S._posSched||[]):null;
+    const _pSel=_pTeams.length?`<select id="pos-team-select" style="width:100%;padding:9px 10px;border:1.5px solid #d1d5db;border-radius:10px;font-size:14px;background:#fff;margin-bottom:8px;">
+        <option value="">-- ${wTeam(tour||null)}を選ぶと、いまの位置を表示します --</option>
+        ${_pTeams.map(t=>`<option value="${escSc_(t.id)}" ${String(_pNo)===String(t.id)?'selected':''}>No.${escSc_(t.id)}　${escSc_(t.name||'')}</option>`).join('')}
+      </select>`:'';
+    const _pBox=_pNo?posBoxHtml_(tour,_pNo,'#f59e0b',false):'';
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">📊 試合システム</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">試合システム</div>
       </div>
       <div style="font-size:12px;color:#6b7280;margin-bottom:12px;">一度負けると右のトーナメントへ移動します。今いるトーナメント・回戦から、残りの試合数を確認できます。</div>
       ${loading?`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`
       :err?`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`
-      :`<div id="sc-view-wrap" style="background:#fff;border:1px solid #eee;border-radius:12px;padding:12px 8px;">${renderSystemChart(chart)}</div>`}
+      :`${_pSel}${_pBox}<div id="sc-view-wrap" style="background:#fff;border:1px solid #eee;border-radius:12px;padding:12px 8px;">${renderSystemChart(chart,false,_pPos&&_pPos.mark)}</div>`}
     </div>`;
   }
 
@@ -8248,34 +8259,30 @@ function rTournamentInfo(){
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
       <button id="btn-ti-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
       <div>
-        <div style="font-size:18px;font-weight:700;color:#111;">📰 大会情報</div>
+        <div style="font-size:18px;font-weight:700;color:#111;">大会情報</div>
         ${tname?`<div style="font-size:12px;color:#6b7280;">${tname}</div>`:''}
       </div>
     </div>
     <div style="display:flex;flex-direction:column;gap:12px;">
       <button id="btn-ti-schedule" style="width:100%;padding:16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
-        <span style="font-size:26px;">🕐</span>
         <div>
           <div style="font-size:15px;font-weight:700;color:#111;">タイムスケジュール</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">当日の進行・時間帯を確認</div>
         </div>
       </button>
       <button id="btn-ti-regulation" style="width:100%;padding:16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
-        <span style="font-size:26px;">📜</span>
         <div>
           <div style="font-size:15px;font-weight:700;color:#111;">レギュレーション</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">ルール・競技方式を確認</div>
         </div>
       </button>
       <button id="btn-ti-prelim" style="width:100%;padding:16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
-        <span style="font-size:26px;">🏅</span>
         <div>
-          <div style="font-size:15px;font-weight:700;color:#111;">予選結果</div>
-          <div style="font-size:12px;color:#6b7280;margin-top:2px;">予選の組み合わせ・結果を確認</div>
+          <div style="font-size:15px;font-weight:700;color:#111;">予選成績</div>
+          <div style="font-size:12px;color:#6b7280;margin-top:2px;">予選の組み合わせ・成績を確認</div>
         </div>
       </button>
       <button id="btn-ti-system" style="width:100%;padding:16px;border-radius:12px;border:1.5px solid #e5e7eb;background:#fff;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;">
-        <span style="font-size:26px;">📊</span>
         <div>
           <div style="font-size:15px;font-weight:700;color:#111;">試合システム</div>
           <div style="font-size:12px;color:#6b7280;margin-top:2px;">トーナメントの流れ・残り試合数を確認</div>
@@ -9107,6 +9114,216 @@ function bracketMatchIdOf_(tour,src,n1,n2){
   return best;
 }
 
+/* =========================================================================
+   【2026-10-26】いまどこにいるか（現在地・次の試合・あと何勝で優勝か）
+   使うもの：
+     ・対戦表（配信された組み合わせ）＋結果が届いた試合（結果反映シート・アプリ）
+     ・大会ルール（試合区分の名前・トーナメント種類の名前・ラウンド名）
+     ・試合システム図（勝ったら下の回戦、負けたら矢印の先＝「負けたチームの行き先」）
+     ・タイムスケジュール（開始時間）
+   いちばん新しい試合（試合区分の番号が一番大きいもの）を見て、
+     ・結果がまだ → その試合が「次の試合」（コート・相手・時間が分かる）
+     ・結果がある → 勝ち負けと試合システム図から、次に進むトーナメント・回戦を出す
+                     （相手とコートは、対戦表が配信されるまで分からない）
+   ========================================================================= */
+function posNorm_(s){return String(s==null?'':s).replace(/\\n|\n|<br\s*\/?>/gi,'').replace(/[\s　]+/g,'').replace(/トーナメント/g,'トナメ').replace(/、/g,'・');}
+function posMatchName_(tour,mc){const r=(tour.matchRules||[]).find(x=>String(x.code)===String(mc));return r?String(r.name||''):'';}
+function posTourneyName_(tour,tc){const r=(tour.tourneyRules||[]).find(x=>String(x.code)===String(tc));return r?String(r.name||''):'';}
+function posRoundOf_(tour,mc,tc){const r=(tour.roundRules||[]).find(x=>String(x.matchCode)===String(mc)&&String(x.tourneyCode)===String(tc));return r?String(r.round||''):'';}
+function posColName_(col){return String((col&&col.name)||'').replace(/\\n|\n|<br\s*\/?>/gi,'');}
+function posRoundTxt_(r){return String(r||'').replace(/、/g,'・');}
+/* その試合でのチームの勝ち負け。'win'／'lose'／'done'（終わったが勝ち負けなし）／null（まだ結果なし） */
+function posResultOf_(matchId,teamNo){
+  const s=sentResultOf_(matchId);
+  if(!s)return null;
+  const sh=(s.sheet||[]).find(x=>sameNo_(x.team_no,teamNo));
+  const ap=(s.app||[]).find(x=>sameNo_(x.team_no,teamNo));
+  const shTxt=sh?([sh.v1,sh.v2].find(v=>v!=null&&String(v).trim()!==''&&!/^\d+$/.test(String(v).trim()))||''):'';
+  const txt=String(shTxt||(ap&&ap.result)||'').trim();
+  if(/勝|〇|○|◯|^win$/i.test(txt))return 'win';
+  if(/負|×|✕|^lose$/i.test(txt))return 'lose';
+  return 'done';
+}
+/* 試合（試合区分×トーナメント種類）が、試合システム図のどの箱か */
+function posCellOf_(tour,mc,tc){
+  const ch=tour.systemChart;
+  if(!ch||!ch.columns||!ch.columns.length)return null;
+  const cols=scRepairCols(ch.columns);
+  const tn=posNorm_(posTourneyName_(tour,tc));
+  if(!tn)return null;
+  const c=cols.findIndex(x=>posNorm_(x.name)===tn);
+  if(c<0)return null;
+  let r=(ch.rowLabels||[]).findIndex(l=>posNorm_(l)===posNorm_(posMatchName_(tour,mc)));
+  if(r<0){
+    const rd=posNorm_(posRoundOf_(tour,mc,tc));
+    const i=(cols[c].cells||[]).findIndex(x=>posNorm_(x)===rd);
+    if(i>=0)r=(cols[c].startRow||0)+i;
+  }
+  return r<0?null:{c:c,r:r,cols:cols,ch:ch};
+}
+function posHas_(cols,c,r){const col=cols[c];if(!col)return false;const i=r-(col.startRow||0);return i>=0&&i<col.cells.length&&String(col.cells[i]||'')!=='';}
+function posCellTxt_(cols,c,r){const col=cols[c];return col?String(col.cells[r-(col.startRow||0)]||''):'';}
+/* 勝ち負けから、次に進む箱。{c,r,third}／{end:'win'|'lose'}／null */
+function posNextCell_(pc,res){
+  const c=pc.c,r=pc.r,cols=pc.cols,ch=pc.ch;
+  // 交流戦は勝ち負けに関係なく、次の回へ（最後の回なら終わり）
+  if(/交流/.test(posColName_(cols[c])))return posHas_(cols,c,r+1)?{c:c,r:r+1}:{end:'done'};
+  if(res==='win')return posHas_(cols,c,r+1)?{c:c,r:r+1}:{end:'win'};
+  if(res!=='lose')return null;
+  // 準決勝で負けたら、同じ列の「決勝・3決」の3位決定戦へ
+  if(posHas_(cols,c,r+1)&&/3決|3位/.test(posCellTxt_(cols,c,r+1))&&!/3決|3位/.test(posCellTxt_(cols,c,r)))return {c:c,r:r+1,third:true};
+  const key=cols[c].name+'@'+r;
+  let d=c+1,sr=r+1;
+  const raw=ch.loseTo&&ch.loseTo[key];
+  if(raw){const p=scSplitRef(raw);const i=cols.findIndex(x=>x.name===p.name);if(i>=0&&i!==c){d=i;sr=(p.row==null)?r+1:p.row;}}
+  const auto=(ch.autoLose!==false)&&posHas_(cols,d,sr);
+  const ov=ch.loseArrows?ch.loseArrows[key]:undefined;
+  const on=(ov===true)?true:((ov===false)?false:auto);
+  if(on&&d!==c&&posHas_(cols,d,sr))return {c:d,r:sr};
+  return {end:'lose'};
+}
+/* 予選（試合システム図の予選のバー）から、勝ち負けで進む箱（「勝ち」「負け」の矢印があるときだけ） */
+function posPrelimNext_(tour,mc,res){
+  const ch=tour.systemChart;
+  if(!ch||!ch.columns||(res!=='win'&&res!=='lose'))return null;
+  const cols=scRepairCols(ch.columns);
+  const pi=(ch.prelims||[]).findIndex(x=>posNorm_(scPrelimName(x))===posNorm_(posMatchName_(tour,mc)));
+  if(pi<0)return null;
+  const lk=(ch.links||[]).find(l=>{
+    if(!l)return false;
+    const a=scSplitRef(l.from);
+    if(!/^(予選|prelim|prelims)$/i.test(a.name)||a.row!==pi)return false;
+    const lab=String(l.label||'');
+    return res==='win'?(l.kind!=='lose'&&/勝/.test(lab)):(l.kind==='lose'||/負/.test(lab));
+  });
+  if(!lk)return null;
+  const b=scRefToPos(lk.to,cols);
+  return (b&&b.k==='cell')?{c:b.c,r:b.r,cols:cols,ch:ch}:null;
+}
+/* タイムスケジュールから開始時間を探す（「決勝トナメ2回戦」「Bトナメ1回戦・交流戦①」「一次予選②」など） */
+function posTimeOf_(sched,tname,round,mname){
+  const rows=(sched||[]).filter(x=>x&&x.name&&x.time);
+  const keys=[];
+  const tn=posNorm_(tname),rd=posNorm_(String(round||'').split(/[、・]/)[0]);
+  if(tn&&rd)keys.push(tn+rd);
+  if(mname)keys.push(posNorm_(mname));
+  for(const k of keys){const hit=rows.find(x=>posNorm_(x.name).split('・').some(p=>p===k));if(hit)return String(hit.time);}
+  for(const k of keys){const hit=rows.find(x=>posNorm_(x.name).indexOf(k)>=0);if(hit)return String(hit.time);}
+  return '';
+}
+function posTimeJa_(t){const m=String(t||'').match(/(\d{1,2})\s*[:：]\s*(\d{2})/);return m?(parseInt(m[1],10)+'時'+m[2]+'分〜'):String(t||'');}
+function posRemain_(cols,c,r){
+  const col=cols[c];if(!col)return null;
+  const name=posColName_(col);
+  if(/交流/.test(name))return null;
+  const last=(col.startRow||0)+col.cells.length-1;
+  return {k:last-r+1,name:name};
+}
+/* そのチームの現在地をまとめる */
+function teamPosition_(tour,teamNo,sched){
+  if(!tour||!teamNo)return null;
+  const seen={},mine=[];
+  (tour.matches||[]).concat(sentMatchCards_(tour)).forEach(m=>{
+    if(!m||!m.matchId||seen[m.matchId])return;
+    if(!(sameNo_(m.teamA,teamNo)||sameNo_(m.teamB,teamNo)))return;
+    seen[m.matchId]=1;mine.push(m);
+  });
+  if(!mine.length)return {none:true};
+  const mcOf=m=>parseInt(m.matchId.split('_')[2],10)||0;
+  mine.sort((a,b)=>mcOf(b)-mcOf(a));
+  const m=mine[0];
+  const parts=m.matchId.split('_');
+  const mc=parts[2]||'',tc=String(m.tourneyCode||'');
+  const tn=posTourneyName_(tour,tc),rd=posRoundOf_(tour,mc,tc),mn=posMatchName_(tour,mc);
+  const curLabel=(tn&&rd)?(tn+posRoundTxt_(rd)):(mn||('試合区分'+mc));
+  const isPre=!(tn&&rd);
+  const pc=isPre?null:posCellOf_(tour,mc,tc);
+  const res=posResultOf_(m.matchId,teamNo);
+  const out={curLabel:curLabel,mark:pc?{c:pc.c,r:pc.r}:null};
+  if(!res){
+    const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
+    const ot=(tour.teams||[]).find(t=>sameNo_(t.id,opp));
+    out.next={known:true,label:curLabel,court:parseInt(parts[3],10)||parts[3],oppName:ot?ot.name:('No.'+opp),
+              time:posTimeOf_(sched,tn,rd,mn)};
+    out.remain=pc?posRemain_(pc.cols,pc.c,pc.r):null;
+    return out;
+  }
+  out.lastRes=res;
+  let nx=null,cols=null;
+  if(pc){
+    const n=posNextCell_(pc,res);
+    if(!n){out.pending=true;return out;}
+    if(n.end){out.end=n.end;return out;}
+    nx=n;cols=pc.cols;
+  }else{
+    const p2=posPrelimNext_(tour,mc,res);
+    if(!p2){out.pending=true;return out;}
+    nx={c:p2.c,r:p2.r};cols=p2.cols;
+  }
+  const col=cols[nx.c];
+  const nm=posColName_(col),ct=posCellTxt_(cols,nx.c,nx.r);
+  out.mark={c:nx.c,r:nx.r};
+  const _lab=nx.third?'3位決定戦':(posNorm_(ct).indexOf(posNorm_(nm))===0?'':nm)+posRoundTxt_(ct);   // 「交流戦交流戦④」にならないように
+  out.next={known:false,label:nx.third?(nm+_lab):_lab,note:col.note||'',
+            time:posTimeOf_(sched,nm,ct,((tour.systemChart&&tour.systemChart.rowLabels)||[])[nx.r])};
+  out.remain=nx.third?null:posRemain_(cols,nx.c,nx.r);
+  return out;
+}
+/* 表示用の文（現在・次の試合・補足） */
+function posTexts_(p){
+  if(!p)return null;
+  const R=x=>x==='win'?'勝ち':(x==='lose'?'負け':'終了');
+  if(p.none)return {now:'試合前',next:'対戦表の配信待ち'};
+  if(p.end==='win')return {now:p.curLabel+'（勝ち）',next:'この大会の試合はすべて終わりました'};
+  if(p.end==='done')return {now:p.curLabel+'（'+R(p.lastRes)+'）',next:'この大会の試合はすべて終わりました'};
+  if(p.end)return {now:p.curLabel+'（'+R(p.lastRes)+'）',next:'この先の試合はありません'};
+  if(p.pending)return {now:p.curLabel+'（'+R(p.lastRes)+'）',next:'次の対戦表の配信待ち'};
+  const n=p.next;
+  const tm=n.time?('／開始時間：'+posTimeJa_(n.time)):'';
+  const sub=p.remain?('あと'+p.remain.k+'勝で'+p.remain.name+'優勝'):'';
+  if(n.known)return {now:n.label,next:'コート'+n.court+'・vs '+n.oppName+tm,sub:sub};
+  return {now:n.label+(n.note?'（'+n.note+'）':''),next:'対戦相手・コートは配信待ち'+tm,prev:'前の試合：'+p.curLabel+' '+R(p.lastRes),sub:sub};
+}
+function posBoxHtml_(tour,teamNo,theme,full){
+  if(!tour||!teamNo)return '';
+  const box=inner=>`<div style="${full?'grid-column:1 / -1;':''}background:#fff;border:1.5px solid ${theme||'#e5e7eb'};border-radius:10px;padding:10px 12px;line-height:1.6;margin-bottom:${full?0:12}px;">${inner}</div>`;
+  if(S._posReady!==tour.eventCode)return box('<div style="font-size:12px;color:#9ca3af;">現在地を読み込み中…</div>');
+  const t=posTexts_(teamPosition_(tour,teamNo,S._posSched||[]));
+  if(!t)return '';
+  return box(`<div style="font-size:14px;font-weight:800;color:#1a1a1a;">現在：${escSc_(t.now)}</div>
+    <div style="font-size:13px;font-weight:700;color:#374151;">次の試合：${escSc_(t.next)}</div>
+    ${t.prev?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.prev)}</div>`:''}
+    ${t.sub?`<div style="font-size:11.5px;color:#6b7280;">${escSc_(t.sub)}</div>`:''}`);
+}
+/* ホームの開催中の大会（rSetup と同じ決め方） */
+function posLiveTour_(){
+  const c=S._liveEventCode;
+  if(!c)return null;
+  return ((S._liveTourId?(AD.tournaments||[]).find(t=>t.id===S._liveTourId):null)||(AD.tournaments||[]).find(t=>t.eventCode===c)||null);
+}
+/* 現在地に使うデータを読む（60秒に1回まで）。読み終わったら描き直す */
+let _posBusy_=false;
+function maybeRefreshPos_(){
+  const home=S.phase==='setup';
+  const tour=home?posLiveTour_():tiTour();
+  if(!tour||!tour.eventCode)return;
+  if(home&&!getValidMyTeam(tour.eventCode))return;
+  const code=tour.eventCode;
+  if(_posBusy_||(S._posCode===code&&Date.now()-(S._posAt||0)<60000))return;
+  _posBusy_=true;S._posCode=code;S._posAt=Date.now();
+  const sch=(typeof sbFetchDoc==='function')
+    ?sbFetchDoc(code,'info').then(d=>(d&&d.schedule)||[])
+    :fetchExhSchedule_(code);
+  Promise.all([
+    syncMatchesFromGitHub(code).catch(()=>{}),
+    loadSentResults_(tour,true).catch(()=>{}),
+    sch.then(r=>{S._posSched=r||[];}).catch(()=>{})
+  ]).then(()=>{
+    _posBusy_=false;S._posReady=code;
+    if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))render();
+  });
+}
+
 function rCourtSearch(){
   const q=S._courtSearchQuery||{teamNo:'',matchCode:''};
   /* 【2026-10-26】「送信済みの試合を確認」から開いたときは、結果送信済みのカードだけを出す */
@@ -9122,7 +9339,7 @@ function rCourtSearch(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-bk-court-search" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">${S._csSentOnly?'📨 送信済みの試合を確認':'🔍 対戦コートを検索'}</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">${S._csSentOnly?'送信済みの試合を確認':'対戦コートを検索'}</div>
       </div>
       <div style="text-align:center;padding:48px 0;color:#9ca3af;">最新の対戦データを読み込み中...</div>
     </div>`;
@@ -9233,7 +9450,7 @@ function rCourtSearch(){
       :`<button class="btn btn-gray btn-sm" id="btn-cs-toggle" style="width:100%;margin-bottom:12px;font-size:13px;padding:9px;">🔍 他の${csW}・試合区分を検索</button>`)
     :searchForm;
 
-  const headerTitle=S._csSentOnly?'📨 送信済みの試合を確認':(_csLive?(personalized?'対戦コートを見る':'対戦コートを検索'):'対戦相手を検索');
+  const headerTitle=S._csSentOnly?'送信済みの試合を確認':(_csLive?(personalized?'対戦コートを見る':'対戦コートを検索'):'対戦相手を検索');
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-court-search">← 戻る</button>
@@ -11928,6 +12145,10 @@ function bind(){
   const bprkb=document.getElementById('btn-prelim-rank-back');
   if(bprkb)bprkb.onclick=()=>{S._tiPrelimRankOpen=false;render();try{window.scrollTo(0,0);}catch(e){}};
   // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
+  /* 【2026-10-26】現在地：ホーム（受付済み）と試合システムの画面で、結果・対戦表・タイムスケジュールを読む */
+  if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))maybeRefreshPos_();
+  const _pts=document.getElementById('pos-team-select');
+  if(_pts)_pts.onchange=()=>{S._posTeamNo=_pts.value;render();};
   /* 【2026-10-26】トーナメント表：結果が届いた試合を読み、スコアシートがあるかを確かめる（あれば 📋 が出る） */
   if(S.phase==='tournamentInfo'&&S._tiView==='bracket'&&!S._tiLoading){
     const _bt=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):tiTour();
