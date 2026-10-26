@@ -92,7 +92,7 @@ const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
 // 「7_10」や「7-10」→「7_10」と表示。読み取れないときは下の値を使います。
-const APP_VERSION_FALLBACK='1_5';
+const APP_VERSION_FALLBACK='1_6';
 // ※公開ページでは、ファイル名がいつも index.html なので上の読み取りができません。
 //   そのため、公開ページに出るのは【必ずこの予備の値】です。
 //   新しい版を作ったら、ここの数字も必ず書き換えること。
@@ -421,7 +421,7 @@ async function checkAdminPw(pw){
 //   raw は生JSONをそのまま返す（base64デコード不要）。
 const GITHUB_RAW_BASE='https://raw.githubusercontent.com/longbeachknit/molkkymania-deta/main';
 const GITHUB_DATA_BASE='https://api.github.com/repos/longbeachknit/molkkymania-deta/contents'; // 書き込み(PUT)用に残す
-const CACHE_TTL=60000; // 【1-2】60秒キャッシュ（同じデータを何度も取りに行かないようにする）
+const CACHE_TTL=20000; // 【1-6】20秒キャッシュ（8-8 と同じ）。Supabase は「更新されたか」だけ先に聞くので、短くしても通信はほとんど増えない（1-2〜1-5 は60秒）
 const _jsonCache={};
 
 /* ===== 【1-1】大会データの読み取り先をデータベース（Supabase）に変更 ==========
@@ -645,6 +645,7 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.bracket2TeamCount!==undefined)tour.bracket2TeamCount=Number(data.bracket2TeamCount)||0;
   if(data.bracket2Name!==undefined)tour.bracket2Name=data.bracket2Name;
   if(data.exhibition!==undefined)tour.exhibition=data.exhibition;
+  if(data.advanceRules!==undefined)tour.advanceRules=Array.isArray(data.advanceRules)?data.advanceRules:[];   // 【8-8】予選順位による進出先
   if(data.sheetUrl!==undefined)tour.sheetUrl=data.sheetUrl;
   if(data.gasUrl)tour.gasUrl=data.gasUrl; // 空で上書きして消さないよう、値がある時だけ反映
   if(data.systemChart!==undefined)tour.systemChart=data.systemChart;
@@ -783,7 +784,10 @@ async function fetchTournamentInfo(action){
     transform=d=>({ sections:(d&&d.regulation)||[] });
   }else if(action==='getPrelim'){
     kind='prelim';
-    transform=d=>({ teams:(d&&d.teams)||[] });
+    /* 【8-8】予選の試合数（prelimMatchCount）と「確定」の印（confirmed）も受け取る。
+         これまでは teams だけ取り出していたので、prelimMatchCount が届いていても使われていなかった。 */
+    transform=d=>({ teams:(d&&d.teams)||[], prelimMatchCount:d&&d.prelimMatchCount,
+                    confirmed:!!(d&&(d.confirmed===true||d.prelimConfirmed===true)) });
   }else if(action==='getBracket'){
     kind='bracket';
     transform=d=>({ rounds:(d&&d.rounds)||[], title:(d&&d.title)||'' });
@@ -992,6 +996,225 @@ function tiTour(){
 /* 【1-5・8-7にそろえた】対戦相手／対戦コートの検索画面が、いま見ている大会。
    指定がなければ、これまでどおり開催中の大会。 */
 function csTour(){return tourByCode(S._csEventCode)||activeTour()||null;}
+/* 【8-8】一次予選（予選①・一次予選② など）かどうか。
+   試合区分の名前に「予選」が入っていて「二次」が入っていないもの。
+   ※一次予選はコートが大会前に決まっているので、並び順などを他の試合と変える。 */
+function isFirstPrelimCode_(tour,code){
+  const r=((tour&&tour.matchRules)||[]).find(x=>String(x.code)===String(code));
+  const n=String((r&&r.name)||'');
+  return n.indexOf('予選')>=0&&n.indexOf('二次')<0;
+}
+/* 【8-8】一次予選の試合区分コードを、早い順に並べたもの（予選①＝1つめ）。 */
+function prelimCodes_(tour){
+  return ((tour&&tour.matchRules)||[]).filter(r=>isFirstPrelimCode_(tour,r.code))
+    .map(r=>String(r.code)).sort((a,b)=>parseInt(a,10)-parseInt(b,10));
+}
+/* 【8-8】チームNoどうしの比べ方（頭の0は無視する） */
+function sameNo_(a,b){
+  const x=String(a==null?'':a).trim(),y=String(b==null?'':b).trim();
+  if(x===''||y==='')return false;
+  return x===y||String(parseInt(x,10))===String(parseInt(y,10));
+}
+/* 【8-8】予選の m 試合目（1から数える）で、そのチームが戦った対戦カードを探す。 */
+function prelimMatchOf_(tour,teamNo,m){
+  const codes=prelimCodes_(tour);
+  const code=codes[m-1]||String(m).padStart(2,'0');
+  return ((tour&&tour.matches)||[]).find(x=>String(x.matchId||'').split('_')[2]===code&&(sameNo_(x.teamA,teamNo)||sameNo_(x.teamB,teamNo)))||null;
+}
+
+/* ===== 【8-8】結果送信済みの試合 =====
+   次のどちらかがある試合を「結果送信済み」として、対戦カードを暗くする。
+     ① 参加者がアプリで送った結果（Supabase の team_results）
+     ② 対戦表の「【運営用】結果反映」シートから送られた結果（Supabase の sheet_results）
+        … フォームでの申請・運営の手打ち・運営の修正など。対戦表の「結果をアプリに反映」で届く
+   点数が両方にあるときは ②（運営）を正とする。
+   あわせて、予選結果を確定させたかどうか（sheet_result_events）もここで読む。 */
+let _sentRes={key:'',at:0,map:null,sheet:null,confirmed:false,finalRanks:[]};
+function sbEventKeyOf_(tour){
+  if(!tour||!tour.eventCode)return '';
+  return (tour.venueCode?tour.venueCode+'_':'')+tour.eventCode;
+}
+async function loadSentResults_(tour,force){
+  const key=sbEventKeyOf_(tour);
+  if(!key)return;
+  if(!force&&_sentRes.key===key&&_sentRes.map&&(Date.now()-_sentRes.at)<60000)return;
+  try{
+    const url=SB_URL+'/rest/v1/team_results?event_code=eq.'+encodeURIComponent(key)+
+      '&select=match_id,team_no,team_name,result,win_sets,loss_sets,draw_sets,set_pts&order=match_id';
+    const res=await fetch(url,{cache:'no-store',headers:{'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON}});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const rows=await res.json();
+    const map={};
+    (rows||[]).forEach(r=>{
+      if(r.result==null||String(r.result).trim()==='')return;   // まだ届いていない行
+      (map[r.match_id]=map[r.match_id]||[]).push(r);
+    });
+    // ② 結果反映シートから送られた結果（と、予選結果を確定させたかどうか）
+    const hd={'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON};
+    const sheet={};let confirmed=false,finalRanks=[];
+    try{
+      const r2=await fetch(SB_URL+'/rest/v1/sheet_results?event_key=eq.'+encodeURIComponent(key)+'&select=match_id,team_no,v1,v2',{cache:'no-store',headers:hd});
+      if(r2.ok)((await r2.json())||[]).forEach(r=>{(sheet[r.match_id]=sheet[r.match_id]||[]).push(r);});
+      // 確定予選順位（対戦表の「確定予選順位を配信」）。1件以上あれば確定
+      const r3=await fetch(SB_URL+'/rest/v1/sheet_result_events?event_key=eq.'+encodeURIComponent(key)+'&select=prelim_confirmed,final_ranks',{cache:'no-store',headers:hd});
+      if(r3.ok){const e3=await r3.json();confirmed=!!(e3&&e3[0]&&e3[0].prelim_confirmed);finalRanks=(e3&&e3[0]&&Array.isArray(e3[0].final_ranks))?e3[0].final_ranks:[];}
+    }catch(e){}
+    _sentRes={key:key,at:Date.now(),map:map,sheet:sheet,confirmed:confirmed,finalRanks:finalRanks};
+  }catch(e){ console.warn('送信済みの結果を読めませんでした',e); }
+}
+/* その試合の送信済みの結果。無ければ null。{app:アプリの行[], sheet:シートの行[]} */
+function sentResultOf_(matchId){
+  const a=(_sentRes.map&&_sentRes.map[matchId])||null;
+  const s=(_sentRes.sheet&&_sentRes.sheet[matchId])||null;
+  return (a||s)?{app:a,sheet:s}:null;
+}
+
+/* 【8-8】その試合に投擲の記録（スコアシート）があるか。まとめて聞いて覚えておく。 */
+const _throwsKnown={};
+async function loadThrowsKnown_(matchIds){
+  const ids=(matchIds||[]).filter(id=>id&&_throwsKnown[id]===undefined);
+  if(!ids.length)return false;
+  try{
+    const inList=ids.map(id=>'"'+String(id).replace(/"/g,'')+'"').join(',');
+    const url=SB_URL+'/rest/v1/throws?match_id=in.('+encodeURIComponent(inList)+')&set_no=eq.1&seq=eq.1&select=match_id';
+    const res=await fetch(url,{cache:'no-store',headers:{'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON}});
+    if(!res.ok)throw new Error('HTTP '+res.status);
+    const rows=await res.json();
+    ids.forEach(id=>{_throwsKnown[id]=false;});
+    (rows||[]).forEach(r=>{_throwsKnown[r.match_id]=true;});
+    return true;
+  }catch(e){ return false; }
+}
+
+/* 【8-8】スコアシートの画面を、試合IDから直接開く（予選結果・対戦カードから）。
+   「← 戻る」で、開いた元の画面にもどる。 */
+async function openScoreSheetFor_(matchId,backPhase,label){
+  if(!matchId)return;
+  _scoreState.selectedMatch={matchId:matchId,teamName:label||''};
+  _scoreState.backTo=backPhase||null;
+  _scoreState.loading=true;_scoreState.scoreData=null;
+  S.phase='scoreView';render();
+  const d=await fetchViewData('getMatchScore',{matchId:matchId});
+  _scoreState.scoreData=d||null;
+  _scoreState.loading=false;render();
+}
+
+/* ===== 【8-8】送信済みの結果から、対戦カード・予選の成績を作る =====
+   対戦表（{大会コード}.json）に無い試合でも、結果が届いていればカードを作り直して出す。
+   （「予選の対戦表を配信」で対戦表が予選だけに置き換わっても、終わった試合のカードは消えない）
+   予選結果も、結果反映シート＋アプリで送られた結果から計算する（「予選結果を配信」を待たずに見られる）。 */
+function pad3s_(x){const s=String(x==null?'':x).trim();return /^\d+$/.test(s)?s.padStart(3,'0'):s;}
+function cardFromCombinedId_(cid){
+  const p=String(cid||'').trim().split('_');
+  if(p.length<6||String(p[5]).length<6)return null;
+  return {matchId:p.slice(0,4).join('_'),tourneyCode:p[4],teamA:p[5].slice(0,3),teamB:p[5].slice(3,6),combinedId:String(cid).trim()};
+}
+function sentMatchCards_(tour){
+  const key=sbEventKeyOf_(tour);
+  if(!key||_sentRes.key!==key)return [];
+  const out={};
+  Object.keys(_sentRes.sheet||{}).forEach(mid=>{
+    const r=(_sentRes.sheet[mid]||[]).find(x=>x.combined_id);
+    const c=r?cardFromCombinedId_(r.combined_id):null;
+    if(c)out[c.matchId]=c;
+  });
+  Object.keys(_sentRes.map||{}).forEach(mid=>{
+    if(out[mid])return;
+    const rows=_sentRes.map[mid]||[];
+    if(rows.length<2)return;
+    out[mid]={matchId:mid,tourneyCode:'',teamA:pad3s_(rows[0].team_no),teamB:pad3s_(rows[1].team_no),combinedId:''};
+  });
+  return Object.keys(out).map(k=>out[k]);
+}
+/* ある試合の、チームA・チームBのセットごとの点数。運営（結果反映シート）を正、無ければアプリ。 */
+function matchSetPts_(mid,teamA,teamB){
+  const isNum=v=>v!=null&&/^\d+$/.test(String(v).trim());
+  const sh=(_sentRes.sheet&&_sentRes.sheet[mid])||[];
+  const sA=sh.find(x=>sameNo_(x.team_no,teamA)),sB=sh.find(x=>sameNo_(x.team_no,teamB));
+  const sp=r=>r?[r.v1,r.v2].map(v=>isNum(v)?parseInt(String(v).trim(),10):null):[];
+  if((sA&&(isNum(sA.v1)||isNum(sA.v2)))||(sB&&(isNum(sB.v1)||isNum(sB.v2))))return {a:sp(sA),b:sp(sB),src:'sheet'};
+  const ap=(_sentRes.map&&_sentRes.map[mid])||[];
+  const aA=ap.find(x=>sameNo_(x.team_no,teamA)),aB=ap.find(x=>sameNo_(x.team_no,teamB));
+  const ap2=r=>r&&Array.isArray(r.set_pts)?r.set_pts.map(v=>isNum(v)?parseInt(v,10):null):[];
+  if(aA||aB)return {a:ap2(aA),b:ap2(aB),src:'app'};
+  return {a:[],b:[],src:null};
+}
+/* 予選の成績を計算する。
+   順位は 勝利セット数 → 引き分けセット数 → 合計点 の順に比べ、すべて同じなら同じ順位（暫定同順位）。
+   セットは、両チームの点数がそろっているものだけ数える。 */
+function computePrelim_(tour){
+  const codes=prelimCodes_(tour);
+  const tTeams=(tour&&tour.teams)||[];
+  if(!codes.length||!tTeams.length)return null;
+  const mm={};
+  ((tour&&tour.matches)||[]).forEach(m=>{const c=String(m.matchId||'').split('_')[2];if(codes.indexOf(c)>=0)mm[m.matchId]={matchId:m.matchId,teamA:m.teamA,teamB:m.teamB};});
+  sentMatchCards_(tour).forEach(m=>{const c=m.matchId.split('_')[2];if(codes.indexOf(c)>=0&&!mm[m.matchId])mm[m.matchId]=m;});
+  const st={};
+  const keyOf=no=>String(parseInt(no,10));
+  tTeams.forEach(t=>{st[keyOf(t.id)]={teamNo:pad3s_(t.id),teamName:t.name||'',sets:0,wins:0,draws:0,losses:0,total:0};});
+  const nameOf=no=>{const r=st[keyOf(no)];return r?r.teamName:('No.'+no);};
+  let done=0,all=0;
+  Object.keys(mm).forEach(mid=>{
+    const m=mm[mid];const k=codes.indexOf(mid.split('_')[2])+1;
+    const A=st[keyOf(m.teamA)],B=st[keyOf(m.teamB)];
+    all++;
+    const pts=matchSetPts_(mid,m.teamA,m.teamB);
+    const put=(me,op,mine,theirs,opNo)=>{
+      if(!me)return;
+      me['opp'+k]=nameOf(opNo);me['oppNo'+k]=pad3s_(opNo);me['mid'+k]=mid;
+      me['p'+k+'a']=mine[0]!=null?String(mine[0]):'';me['p'+k+'b']=mine[1]!=null?String(mine[1]):'';
+    };
+    put(A,B,pts.a,pts.b,m.teamB);put(B,A,pts.b,pts.a,m.teamA);
+    let counted=false;
+    const n=Math.max(pts.a.length,pts.b.length);
+    for(let i=0;i<n;i++){
+      const x=pts.a[i],y=pts.b[i];
+      if(x==null||y==null)continue;
+      counted=true;
+      [[A,x,y],[B,y,x]].forEach(([me,mine,theirs])=>{
+        if(!me)return;
+        me.sets++;me.total+=mine;
+        if(mine>theirs)me.wins++;else if(mine===theirs)me.draws++;else me.losses++;
+      });
+    }
+    if(counted)done++;
+  });
+  const rows=Object.keys(st).map(k=>st[k]);
+  const cmp=(a,b)=>(b.wins-a.wins)||(b.draws-a.draws)||(b.total-a.total);
+  const sorted=rows.slice().sort(cmp);
+  sorted.forEach((r,i)=>{r.rank=(i>0&&cmp(sorted[i-1],r)===0)?sorted[i-1].rank:String(i+1);});
+  rows.forEach(r=>{['sets','wins','draws','losses','total'].forEach(f=>{r[f]=String(r[f]);});});
+  return {teams:rows,matchCount:codes.length,done:done,all:all};
+}
+/* 予選結果の画面のデータを読む。
+   結果反映シート＋アプリの結果から計算できればそれを使う（暫定）。
+   まだどこにも結果が無く、「予選結果を配信」済みなら、これまでどおりそちらを使う。 */
+async function loadPrelimView_(){
+  const tour=tiTour();
+  let json=null;
+  try{json=await fetchTournamentInfo('getPrelim');if(json&&json.error)json=null;}catch(e){json=null;}
+  if(tour){try{await loadSentResults_(tour,true);}catch(e){}}
+  const live=tour?computePrelim_(tour):null;
+  const hasJson=!!(json&&json.teams&&json.teams.length);
+  if(live&&(live.done>0||!hasJson)){
+    S._tiPrelim=live.teams;S._tiPrelimMatches=live.matchCount;S._tiPrelimLive=live;
+  }else if(hasJson){
+    S._tiPrelim=json.teams;S._tiPrelimMatches=prelimMatchCountOf(json);S._tiPrelimLive=null;
+  }else{
+    throw new Error('まだ予選の結果がありません');
+  }
+  S._tiPrelimConfirmed=!!(json&&json.confirmed===true)||!!_sentRes.confirmed;
+  /* 【8-8】確定予選順位が届いていれば、順位はそちらを使う（同順位の決め方など、運営の判断が入った順位）。
+       数字（総セット・勝利など）は、これまでどおり結果から計算したもの。
+       確定順位に載っていないチームは順位を「-」にする。 */
+  const fr=_sentRes.finalRanks||[];
+  if(fr.length){
+    const byNo={};fr.forEach(x=>{byNo[String(parseInt(x.team_no,10))]=String(x.rank);});
+    (S._tiPrelim||[]).forEach(t=>{const r=byNo[String(parseInt(t.teamNo,10))];t.rank=(r!=null)?r:'-';});
+    S._tiPrelimConfirmed=true;
+  }
+}
+
 /* 【1-5・8-7にそろえた】その大会が「いま開催中」かどうか（この端末が見ている開催中の大会）。 */
 function isLiveEventCode(code){return !!code&&String(code)===String(S._liveEventCode||'');}
 /* 画面の言い方を「チーム」「選手」で切り替えるための道具。
@@ -1155,7 +1378,7 @@ const SB_SUBMIT_KEY='f3f7569d10abe3b74b69732b824669d5baec9e7d2c94ff28';
      古いコードのまま動いている前の住所の方が正しい。ここだけを変えること。 */
 const GAS_URL='https://script.google.com/macros/s/AKfycbw-KUyzj888W6RBiIQhHjacHFAUV6PXr_InP8apMDSua7Codg_aCTzwJtcTZspPGbrnhg/exec';
 // QRに埋め込むアプリのベースURL（カメラアプリからの読み取り用）。末尾スラッシュ必須。
-const APP_BASE_URL='https://longbeachknit.github.io/molkkymania-score/';
+const APP_BASE_URL='https://app.molkky.co.jp/app/';   // 【1-6】ストアアプリの公開アドレス（以前は従来アプリのアドレスのままだった）
 const _viewCache={}; // 成績閲覧用キャッシュ
 
 // ===== 受付データ送信（試合結果と同じPOSTメカニズム） =====
@@ -1283,7 +1506,11 @@ function findTourByScoreEvent(ec){
 
 function runCourtSearch(teamNo,matchCode){
   // 【1-5・8-7にそろえた】いま検索対象にしている大会の対戦カードから探す
-  const searchSrc=(csTour()||{matches:[]}).matches||[];
+  const _srcT=csTour()||{matches:[]};
+  const _base=_srcT.matches||[];
+  /* 【8-8】対戦表に無くても、結果が届いている試合（結果反映シート・アプリ）はカードを作り直して出す */
+  const _have={};_base.forEach(m=>{_have[m.matchId]=true;});
+  const searchSrc=_base.concat(sentMatchCards_(_srcT).filter(m=>!_have[m.matchId]));
   const results=searchSrc.filter(m=>{
     const mparts=m.matchId.split('_');
     const mCode=mparts[2]||'';
@@ -1293,10 +1520,18 @@ function runCourtSearch(teamNo,matchCode){
     const codeMatch=!matchCode||(mCode===matchCode.padStart(2,'0')||mCode===matchCode);
     return teamMatch&&codeMatch;
   });
+  /* 【8-8】並び順。
+       一次予選（予選①・一次予選② など）は大会前にコートが決まっているので、早い順（①→②→③）。
+       それ以外（二次予選・トーナメントなど）は、これまでどおり新しい試合が上。
+       一次予選はいちばん下にまとめる（あとから始まる試合ほど上に積み上がっていく）。 */
+  const _sortT=csTour();
   results.sort((a,b)=>{
-    const ma=parseInt((a.matchId.split('_')[2]||'0'));
-    const mb=parseInt((b.matchId.split('_')[2]||'0'));
-    if(mb!==ma)return mb-ma;
+    const ca_=(a.matchId.split('_')[2]||'0'),cb_=(b.matchId.split('_')[2]||'0');
+    const pa=isFirstPrelimCode_(_sortT,ca_),pb=isFirstPrelimCode_(_sortT,cb_);
+    if(pa!==pb)return pa?1:-1;
+    const ma=parseInt(ca_);
+    const mb=parseInt(cb_);
+    if(ma!==mb)return pa?(ma-mb):(mb-ma);
     const ca=parseInt((a.matchId.split('_')[3]||'0'));
     const cb=parseInt((b.matchId.split('_')[3]||'0'));
     return ca-cb;
@@ -3009,8 +3244,29 @@ function eventCardBtnsHtml(tour,theme){
     ${b('card-btn-regulation','📜 レギュレーション')}
     ${b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
     ${b('card-btn-sheet','📑 大会スプレッドシート')}
-    ${b('card-btn-opponent','🔍 対戦相手を検索',true)}
+    ${b('card-btn-opponent','🔍 対戦相手・コートを検索',true)}
   </div>`;
+}
+
+/* 【8-8】開催中の大会のカードに入れる「試合」のボタン。
+   これまでホームの「試合」の欄にあったものを、開催中の大会のカードの中へ移した。
+   ボタンの id は前と同じなので、押したときの動きは変わらない。
+   ※「対戦コートを検索」は「送信済みの試合を確認」に名前を変えた（中身は準備中）。
+     対戦コートは、カードの「対戦相手・コートを検索」から探せる。 */
+function liveMatchBtnsHtml(){
+  const b=(id,icon,label)=>`<button id="${id}" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
+        <span style="font-size:22px;">${icon}</span>
+        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">${label}</div>
+      </button>`;
+  return`<div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin:14px 0 8px;border-left:3px solid #FFB800;padding-left:7px;">試合</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      ${b('btn-go-matchid','📷','QRコードで<br>試合開始')}
+      ${b('btn-go-result-only','📤','試合結果のみ<br>を送信')}
+      ${b('btn-go-prelim','🏅','予選結果<br>を確認')}
+      ${b('btn-go-remaining','📊','残り試合数<br>を確認')}
+      ${b('btn-go-bracket','🏆','トーナメント表')}
+      ${b('btn-go-court-search','📨','送信済みの試合<br>を確認')}
+    </div>`;
 }
 
 function rSetup(){
@@ -3113,6 +3369,7 @@ function rSetup(){
       </div>
       ${_rightSide}
     </div>
+    ${liveMatchBtnsHtml()}
     ${eventCardBtnsHtml(_liveTour,_theme)}
     ${_exhBtn}
   </div>`;
@@ -3191,35 +3448,7 @@ function rSetup(){
       </div>
     </div>
     ${topBlock}
-    <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">試合</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:20px;">
-      <button id="btn-go-matchid" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📷</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">QRコードで<br>試合開始</div>
-      </button>
-      <button id="btn-go-result-only" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📤</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">試合結果のみ<br>を送信</div>
-      </button>
-      <!-- 【8-7】ここから下は 2列×3行。左上から順に並ぶ。
-           2行目＝対戦コートを検索／予選結果、3行目＝残り試合数／トーナメント表 -->
-      <button id="btn-go-court-search" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">${courtIcon}</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">${courtLabel}</div>
-      </button>
-      <button id="btn-go-prelim" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">🏅</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">予選結果<br>を確認</div>
-      </button>
-      <button id="btn-go-remaining" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📊</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">残り試合数<br>を確認</div>
-      </button>
-      <button id="btn-go-bracket" style="padding:12px 6px;background:#FFCB3D;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">🏆</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">トーナメント表</div>
-      </button>
-    </div>
+    <!-- 【8-8】「試合」の欄のボタンは、開催中の大会のカードの中へ移した（liveMatchBtnsHtml） -->
     ${_upcomingCard}
     <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">成績・記録</div>
     <div style="display:flex;gap:8px;">
@@ -4097,6 +4326,67 @@ function ruleCardsHtml(obj){
      (b) 交流戦の試合数
      (c) それぞれの名前
      (d) それぞれの詳細説明（参加者の選択画面に出る） */
+/* ===== 【8-8】予選順位による進出先 =====
+   大会設定に「○位〜○位 → 進出先（トーナメント種類）」を持つ。
+   予選結果の画面で「このままいくと〜に進出」「〜に進出！」、ランキングで「⬆︎〜進出」などを出すのに使う。
+   形：[{from:1,to:32,tourneyCode:'02',label:'決勝トナメ'}, …]（label は空なら トーナメント種類の名前） */
+const ADV_COLORS_=['#F28B82','#FBC77A','#8AB4F8','#A8DAB5','#D7AEFB','#FDE293','#F6AEA9','#AECBFA'];
+function advanceRulesOf_(tour){
+  return ((tour&&tour.advanceRules)||[]).map(r=>({from:parseInt(r.from,10)||'',to:parseInt(r.to,10)||'',tourneyCode:String(r.tourneyCode||''),label:String(r.label||'').trim()}));
+}
+/* 進出先の名前（tourneyCode の名前。無ければ「トナメ区分○○」） */
+function advanceName_(tour,rule){
+  const tr=((tour&&tour.tourneyRules)||[]).find(x=>String(x.code)===String(rule.tourneyCode));
+  return (tr&&tr.name)||('トナメ区分'+rule.tourneyCode);
+}
+/* その順位の進出先。{i, rule, name(正式名), label(短い名前)} か null */
+function advanceOfRank_(tour,rank){
+  const n=parseInt(rank,10);
+  if(isNaN(n))return null;
+  const rules=advanceRulesOf_(tour);
+  for(let i=0;i<rules.length;i++){
+    const r=rules[i];
+    if(r.from&&r.to&&r.tourneyCode&&n>=r.from&&n<=r.to){
+      const name=advanceName_(tour,r);
+      return {i:i,rule:r,name:name,label:r.label||name};
+    }
+  }
+  return null;
+}
+/* 管理者画面：予選順位による進出先の設定 */
+function advanceEditorHtml(tour){
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const rules=advanceRulesOf_(tour);
+  const trs=(tour&&tour.tourneyRules)||[];
+  const rows=rules.map((r,i)=>`
+    <div style="background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;">
+        <input type="number" class="te-adv-from" data-i="${i}" value="${esc(r.from)}" placeholder="1" min="1" inputmode="numeric" style="width:70px;font-size:14px;text-align:center;"/>
+        <span style="font-size:13px;color:#374151;">位〜</span>
+        <input type="number" class="te-adv-to" data-i="${i}" value="${esc(r.to)}" placeholder="32" min="1" inputmode="numeric" style="width:70px;font-size:14px;text-align:center;"/>
+        <span style="font-size:13px;color:#374151;">位</span>
+        <button class="btn btn-red-o btn-xs te-adv-del" data-i="${i}" style="margin-left:auto;padding:3px 8px;">削除</button>
+      </div>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">進出先（トーナメント種類）</div>
+      <select class="te-adv-code" data-i="${i}" style="font-size:14px;margin-bottom:8px;">
+        <option value="">-- 選んでください --</option>
+        ${trs.map(t=>`<option value="${esc(t.code)}" ${String(t.code)===r.tourneyCode?'selected':''}>${esc(t.code)}${t.name?'（'+esc(t.name)+'）':''}</option>`).join('')}
+      </select>
+      <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">ランキングでの短い名前（空ならトーナメント種類の名前）</div>
+      <input type="text" class="te-adv-label" data-i="${i}" value="${esc(r.label)}" placeholder="例: 決勝トナメ" style="font-size:14px;"/>
+    </div>`).join('');
+  return `<div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
+    <div style="display:flex;align-items:center;margin-bottom:6px;">
+      <div style="flex:1;font-size:13px;font-weight:600;color:#374151;">予選順位による進出先</div>
+      <button class="btn btn-green btn-xs" id="te-adv-add" style="padding:4px 10px;">＋ 追加</button>
+    </div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:10px;line-height:1.7;">予選（一次予選）の順位ごとに、どのトーナメントへ進むかを決めます。<br>
+      予選結果の画面に「このままいくと〜に進出」（確定後は「〜に進出！」）、ランキングに「⬆︎〜進出」などが出ます。<br>
+      ${trs.length?'':'<b style="color:#b45309;">※先に「トーナメント種類ルール」を登録してください。</b>'}</div>
+    ${rows||'<div style="font-size:13px;color:#9ca3af;padding:4px 0;">まだ設定がありません</div>'}
+  </div>`;
+}
+
 function exhEditorHtml(tour){
   const ex=exhOf(tour);
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -4232,6 +4522,7 @@ function rAdminTourEdit(){
           </div>
         </div>
         ${exhEditorHtml(tour)}
+        ${advanceEditorHtml(tour)}
       </div>
       <div style="font-size:11px;color:#9ca3af;margin-top:10px;">入力内容は自動で保存されます。「保存して戻る」を押すと全端末に配信されます。</div>
     </div>
@@ -5187,6 +5478,7 @@ function rScoreView(){
   </div>`;
   if(!ss.scoreData)return ssEmpty_('スコアシートを読み込めませんでした');
 
+  // 【8-8】matchId はデータに入っていないことがあるので、選んだ試合のものを使う（見出しに undefined と出ていた）
   const {rows,teams,matchId}=ss.scoreData;
   if(!rows||rows.length===0)return ssEmpty_('この試合の投擲データはありません');
 
@@ -5351,7 +5643,7 @@ function rScoreView(){
       <div style="font-size:16px;font-weight:700;">📋 スコアシート</div>
     </div>
     <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">
-      ${m?m.teamName:''} &nbsp;|&nbsp; ${matchId}
+      ${m?m.teamName:''} &nbsp;|&nbsp; ${matchId||(m&&m.matchId)||''}
     </div>
     ${setsHtml}
   </div>`;
@@ -5649,6 +5941,7 @@ async function publishSettings(tour,opts){
     bracket2TeamCount: Number(tour.bracket2TeamCount)||0,
     bracket2Name: tour.bracket2Name||'Bトーナメント',
     exhibition: exhOf(tour),   // 交流戦の参加申請の設定（他の端末へ届ける）
+    advanceRules: advanceRulesOf_(tour),   // 【8-8】予選順位による進出先（例：1〜32位→決勝トーナメント）
     systemChart: tour.systemChart||null,
     venue: resolveVenue(tour), // 会場（場所）情報＋詳細を同梱して参加者へ配信
     tourInfo: tour.tourInfo||{rules:'',notes:''}, // 大会の詳細（規約・注意点）を同梱して参加者へ配信
@@ -5684,7 +5977,8 @@ async function publishSettings(tour,opts){
       body:JSON.stringify(body)
     });
     if(res.ok){
-      if(!silent)alert('✅ 配信完了！\n参加者が次回アクセス時に自動で設定が反映されます。');
+      const sbMsg=await publishSettingsToSb_(tour,payload);   // 【1-6】Supabase にも直接書く
+      if(!silent)alert('✅ 配信完了！\n参加者が次回アクセス時に自動で設定が反映されます。'+sbMsg);
       return true;
     } else {
       const err=await res.json();
@@ -5699,6 +5993,82 @@ async function publishSettings(tour,opts){
   }
 }
 
+/* ===== 【1-6】大会設定・会場を Supabase にも直接書く =====
+   「設定を配信する」「会場を配信」で GitHub に置いたあと、Supabase の event_docs／venue_docs にも直接書く。
+   ストアアプリはここを読むので、コピーの道具（sync）を待たずに届く。合言葉は「配信キー」（開催中リストと同じ）。
+   ★会場マップの画像は Supabase に入れない。
+     画像は app.molkky.co.jp の置き場所（GitHub の molkkymania_app/maps/）に画像ファイルとして置き、
+     Supabase には画像の住所（mapImageUrl）だけを書く。アプリは画像を GitHub から直接読む。
+     ファイル名は画像の中身から作る（コピーの道具と同じ決め方）ので、同じ画像は二重に置かれない。 */
+const MAP_REPO_='longbeachknit/molkkymania_app';
+const MAP_BASE_='https://app.molkky.co.jp/';
+async function sha1Hex_(bytes){
+  const h=await crypto.subtle.digest('SHA-1',bytes);
+  return [...new Uint8Array(h)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+/* detail の中の mapImage（画像そのもの）を画像ファイルにして置き、住所に置き換えた写しを返す。
+   置けなかったときは画像を外すだけ（前に置いた画像の住所 mapImageUrl はそのまま残す）。 */
+async function splitMapForSb_(detail){
+  const d=JSON.parse(JSON.stringify(detail||{}));
+  const du=String(d.mapImage||'');
+  delete d.mapImage;
+  if(!du.startsWith('data:image/'))return {detail:d,ok:true};
+  try{
+    const head=du.slice(5,du.indexOf(';')),b64=du.slice(du.indexOf(',')+1);
+    const ext={'image/png':'png','image/jpeg':'jpg','image/jpg':'jpg','image/webp':'webp','image/gif':'gif','image/svg+xml':'svg'}[head]||'png';
+    const bin=atob(b64);const bytes=new Uint8Array(bin.length);for(let i=0;i<bin.length;i++)bytes[i]=bin.charCodeAt(i);
+    const name='maps/'+(await sha1Hex_(bytes)).slice(0,16)+'.'+ext;
+    const api='https://api.github.com/repos/'+MAP_REPO_+'/contents/'+name;
+    const h={'Authorization':'token '+AD.githubPat,'Accept':'application/vnd.github+json'};
+    const g=await fetch(api+'?t='+Date.now(),{headers:h,cache:'no-store'});
+    if(!g.ok){
+      const p=await fetch(api,{method:'PUT',headers:Object.assign({'Content-Type':'application/json'},h),
+        body:JSON.stringify({message:'会場マップ画像を追加',content:b64})});
+      if(!p.ok)throw new Error('HTTP '+p.status);
+    }
+    d.mapImageUrl=MAP_BASE_+name;
+    return {detail:d,ok:true};
+  }catch(e){
+    console.warn('会場マップ画像を置けませんでした',e);
+    return {detail:d,ok:false};
+  }
+}
+/* Supabase の書き込み窓口を呼ぶ（配信キー）。{ok, reason} */
+async function sbPutRpc_(rpc,args){
+  const key=String(AD.sbSyncKey||'').trim();
+  if(!key)return {ok:false,reason:'nokey'};
+  try{
+    const res=await fetch(SB_URL+'/rest/v1/rpc/'+rpc,{method:'POST',
+      headers:{'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON,'Content-Type':'application/json'},
+      body:JSON.stringify(Object.assign({p_key:key},args))});
+    if(res.ok)return {ok:true};
+    const t=await res.text();
+    return {ok:false,reason:t.indexOf('合言葉')>=0?'badkey':('http '+res.status)};
+  }catch(e){return {ok:false,reason:'net'};}
+}
+function sbPutMsg_(r,mapOk){
+  if(r.ok)return '\n✅ 新しいアプリ（Supabase）にも直接届けました。'+(mapOk?'':'\n⚠️ 会場マップの画像は置けませんでした（前の画像のまま）。GitHub Token を確かめてください。');
+  if(r.reason==='nokey')return '\n⚠️ 新しいアプリ（Supabase）へは届いていません。管理画面の「📡 新アプリの開催中リスト」に配信キーを入れてから、もう一度配信してください。';
+  if(r.reason==='badkey')return '\n⚠️ 新しいアプリ（Supabase）へは届いていません：配信キーが違います。';
+  return '\n⚠️ 新しいアプリ（Supabase）へは届いていません（'+r.reason+'）。もう一度配信してください。';
+}
+async function publishSettingsToSb_(tour,payload){
+  const p=JSON.parse(JSON.stringify(payload));
+  let mapOk=true;
+  if(p.venue&&p.venue.detail){const sp=await splitMapForSb_(p.venue.detail);p.venue.detail=sp.detail;mapOk=sp.ok;}
+  const ev=String(tour.eventCode||''),vc=String(tour.venueCode||'');
+  const r=await sbPutRpc_('put_event_doc',{p_event_key:(vc?vc+'_':'')+ev,p_kind:'settings',p_venue_code:vc,p_event_code:ev,p_payload:p});
+  if(r.ok){try{delete _jsonCache['settings_'+ev];}catch(e){}}
+  return sbPutMsg_(r,mapOk);
+}
+async function publishVenueToSb_(venue,payload){
+  const p=JSON.parse(JSON.stringify(payload));
+  const sp=await splitMapForSb_(p.detail);p.detail=sp.detail;
+  const r=await sbPutRpc_('put_venue_doc',{p_venue_code:String(venue.code),p_payload:p});
+  return sbPutMsg_(r,sp.ok);
+}
+
+let _lastVenueSbMsg='';
 // 場所（会場）1件をGitHubに配信する。大会の publishSettings と同じ書き込み方法。
 async function publishVenue(venue,opts){
   const silent=opts&&opts.silent;
@@ -5737,6 +6107,12 @@ async function publishVenue(venue,opts){
       headers:{'Authorization':'token '+AD.githubPat,'Content-Type':'application/json'},
       body:JSON.stringify(body)
     });
+    if(res.ok){
+      // 【1-6】Supabase にも直接書く（画像は GitHub に置いて住所だけ）
+      const sbMsg=await publishVenueToSb_(venue,payload);
+      _lastVenueSbMsg=sbMsg;   // 呼び出し元のお知らせに添える
+      if(!silent&&sbMsg.indexOf('⚠️')>=0)alert('会場を GitHub に配信しました。'+sbMsg);
+    }
     return res.ok;
   }catch(e){
     if(!silent)alert('❌ エラー: '+e.message);
@@ -7384,9 +7760,13 @@ function rTournamentInfo(){
       const parts=[];
       const x0=LABEL_W;
       function nameText(t,x,y){
-        const s=esc(String(t||'').trim());
-        if(s==='')return '';
-        return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="10" fill="#111">${s.length>12?s.slice(0,12)+'…':s}</text>`;
+        /* 【8-8】文字数は「&」などを置き換える前の名前で数える。
+             置き換えたあとで数えると「&」が5文字ぶんに数えられ、
+             切る位置によっては表示が崩れていた。 */
+        const raw=String(t||'').trim();
+        if(raw==='')return '';
+        const s=raw.length>12?esc(raw.slice(0,12))+'…':esc(raw);
+        return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="10" fill="#111">${s}</text>`;
       }
       function seg(x1,y1,x2,y2,red){
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${red?RED:BLACK}" stroke-width="${red?2.5:1}"/>`;
@@ -7458,10 +7838,11 @@ function rTournamentInfo(){
       // 最右：王冠＋優勝枠
       const yF=nodes[0]?nodes[0].y:PAD_TOP;
       const xC=colBase+COL_W;
-      const cN=esc(String(champion||'').trim());
+      const cRaw=String(champion||'').trim();   // 【8-8】文字数は置き換える前の名前で数える
+      const cN=cRaw.length>9?esc(cRaw.slice(0,9))+'…':esc(cRaw);
       parts.push(`<text x="${xC+CROWN_W/2-24}" y="${yF-16}" font-size="22">👑</text>`);
       parts.push(`<rect x="${xC}" y="${yF-12}" width="${CROWN_W-10}" height="24" rx="4" fill="#fff" stroke="${cN?RED:'#9ca3af'}" stroke-width="${cN?2.5:1.5}"/>`);
-      if(cN!=='')parts.push(`<text x="${xC+7}" y="${yF}" dominant-baseline="central" font-size="11" font-weight="700" fill="#b45309">${cN.length>9?cN.slice(0,9)+'…':cN}</text>`);
+      if(cN!=='')parts.push(`<text x="${xC+7}" y="${yF}" dominant-baseline="central" font-size="11" font-weight="700" fill="#b45309">${cN}</text>`);
 
       return `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="display:block;font-family:inherit;">${parts.join('')}</svg>`;
     }
@@ -7570,31 +7951,133 @@ function rTournamentInfo(){
       ${pInputBlock}
     </div>`;
 
+    /* 【8-8】予選のランキング（順位・No・名前・勝利セット数・引き分けセット数・合計点）。
+         ボタンで開け閉めする。 */
+    const rankOpen=!!S._tiPrelimRankOpen;
+    const prelimRankBtn=(!loading&&!err&&teams.length)
+      ?`<button id="btn-prelim-rank" style="width:100%;padding:12px;margin-bottom:10px;font-size:14px;font-weight:800;background:${rankOpen?'#fff':'#FFCB3D'};color:#2b2100;border:1.5px solid #FFCB3D;border-radius:12px;cursor:pointer;">${rankOpen?'▲ ランキングを閉じる':'🏆 予選のランキングを確認'}</button>`:'';
+    const prelimRankTable=(rankOpen&&teams.length)?(()=>{
+      /* 【8-8】予選のランキング。罫線付きの表で、
+           順位（暫定）・No・名前・総セット・勝利・引き分け・合計点 の順。
+           大会設定の「予選順位による進出先」があれば、区切りごとに見出し行を入れ、順位の欄を色分けする。 */
+      const escR=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+      const rk=t=>{const n=parseInt(t.rank,10);return isNaN(n)?99999:n;};
+      const list=teams.slice().sort((a,b)=>rk(a)-rk(b)||parseInt(a.teamNo,10)-parseInt(b.teamNo,10));
+      const _rt=tiTour();
+      const conf=S._tiPrelimConfirmed===true;
+      const bd='border:1px solid #1f2937;';
+      const th=bd+'padding:6px 3px;font-size:11px;color:#111;font-weight:700;background:#d1d5db;white-space:nowrap;text-align:center;';
+      const td=bd+'padding:7px 4px;font-size:12.5px;background:#fff;';
+      let prevG=-2,html='';
+      list.forEach(t=>{
+        const adv=advanceOfRank_(_rt,t.rank);
+        const g=adv?adv.i:-1;
+        if(g!==prevG&&adv){
+          const r=adv.rule;
+          html+=`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:800;color:#1a1a1a;background:${ADV_COLORS_[g%ADV_COLORS_.length]}88;">${g===0?'⬆︎':'⬇︎'} ${escR(adv.label)}${conf?'進出':'進出圏'}（${r.from}〜${r.to}位）</td></tr>`;
+        }else if(g!==prevG&&!adv&&prevG!==-2){
+          html+=`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:700;color:#6b7280;background:#f3f4f6;">進出先の設定なし</td></tr>`;
+        }
+        prevG=g;
+        const rc=adv?ADV_COLORS_[g%ADV_COLORS_.length]:'#fff';
+        const me=sel&&sameNo_(sel.teamNo,t.teamNo);
+        html+=`<tr${me?' style="outline:2.5px solid #f59e0b;outline-offset:-2px;"':''}>
+          <td style="${td}text-align:center;font-weight:800;background:${rc};">${escR(t.rank||'-')}</td>
+          <td style="${td}text-align:center;">${escR(t.teamNo)}</td>
+          <td style="${td}font-weight:700;word-break:break-all;${me?'background:#FFF7D6;':''}">${escR(t.teamName||'')}</td>
+          <td style="${td}text-align:right;">${t.sets!=null?escR(t.sets):'-'}</td>
+          <td style="${td}text-align:right;">${escR(t.wins||'0')}</td>
+          <td style="${td}text-align:right;">${escR(t.draws||'0')}</td>
+          <td style="${td}text-align:right;font-weight:700;">${escR(t.total||'0')}</td>
+        </tr>`;
+      });
+      return`<div style="margin-bottom:12px;overflow-x:auto;">
+        ${conf?'':'<div style="font-size:12px;font-weight:800;color:#dc2626;margin-bottom:4px;">※こちらは暫定の順位です</div>'}
+        <table style="width:100%;border-collapse:collapse;">
+          <thead><tr>
+            <th style="${th}">${conf?'順位':'順位<br>（暫定）'}</th><th style="${th}">${pW}<br>No</th><th style="${th}text-align:left;">${pW}名</th>
+            <th style="${th}">総<br>セット</th><th style="${th}">勝利</th><th style="${th}">引き<br>分け</th><th style="${th}">合計点</th>
+          </tr></thead>
+          <tbody>${html}</tbody>
+        </table>
+      </div>`;
+    })():'';
+    /* 【8-8】予選結果が確定する前は「暫定」の警告、確定したら「確定しました」を出す。
+         確定の印は、対戦表の「予選結果を確定させる」で配信される（confirmed）。 */
+    const prelimNotice=(!loading&&!err&&teams.length)
+      ?(S._tiPrelimConfirmed===true
+        ?`<div style="background:#E1F5EE;border:1.5px solid #9FE1CB;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#085041;font-weight:700;line-height:1.6;">✅ 予選結果が確定しました。<br><span style="font-weight:600;">これ以降の修正は受け付けられません。</span></div>`
+        :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">⚠️ 予選結果は暫定のものです。<br><span style="font-weight:600;">確定前のため、このあと変わることがあります。</span>${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合<br><span style="font-weight:500;color:#a16207;">順位は 勝利セット数 → 引き分けセット数 → 合計点 の順。すべて同じなら同順位。</span></div>`:''}</div>`)
+      :'';
+
     let body='';
     if(loading){body=`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`;}
     else if(err){body=`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`;}
     else if(sel){
-      const setRow=(label,opp,a,b)=>{
+      /* 【8-8】セットごとに、相手チームの点数も並べて出す。
+           相手の点数は、対戦カードで相手を探し、相手チームの行の同じ予選の点数を使う
+           （スプレッドシートの配信内容はそのまま。アプリ側で組み合わせている）。
+           アプリで試合内容（投擲）まで送られている試合には「スコアシートを確認」を出す。 */
+      const _pTour=tiTour();
+      const escP=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+      const oppRowOf=(m)=>{
+        // 【8-8】計算した予選の成績には、相手のNoと試合IDが入っている
+        if(sel['oppNo'+m]){
+          const row0=teams.find(t=>sameNo_(t.teamNo,sel['oppNo'+m]));
+          return {row:row0||null,match:sel['mid'+m]?{matchId:sel['mid'+m]}:null};
+        }
+        const mt=prelimMatchOf_(_pTour,sel.teamNo,m);
+        if(mt){
+          const oNo=sameNo_(mt.teamA,sel.teamNo)?mt.teamB:mt.teamA;
+          const row=teams.find(t=>sameNo_(t.teamNo,oNo));
+          if(row)return {row:row,match:mt};
+        }
+        const nm=String(sel['opp'+m]||'').trim();
+        const row2=nm?teams.find(t=>String(t.teamName||'').trim()===nm&&!sameNo_(t.teamNo,sel.teamNo)):null;
+        return {row:row2||null,match:mt||null};
+      };
+      const setBox=(no,mine,theirs)=>`<div style="flex:1;text-align:center;background:#f8fafc;border-radius:8px;padding:8px 4px;">
+            <div style="font-size:11px;color:#9ca3af;">${no}セット目</div>
+            <div style="font-size:18px;font-weight:800;color:#111;line-height:1.3;">${mine!==''?escP(mine):'-'}<span style="font-size:13px;font-weight:600;color:#9ca3af;"> - ${theirs!==''&&theirs!=null?escP(theirs):'-'}</span></div>
+          </div>`;
+      const setRow=(label,opp,a,b,m)=>{
+        const o=oppRowOf(m);
+        const oa=o.row?String(o.row['p'+m+'a']||''):'';
+        const ob=o.row?String(o.row['p'+m+'b']||''):'';
+        const mid=o.match?o.match.matchId:'';
+        const hasSheet=mid&&_throwsKnown[mid]===true;
         return`<div style="border:1.5px solid #e5e7eb;border-radius:10px;padding:12px;margin-bottom:10px;">
-          <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">${label}　<span style="font-weight:400;color:#6b7280;">vs ${opp||'-'}</span></div>
+          <div style="font-size:13px;font-weight:700;color:#374151;margin-bottom:6px;">${label}　<span style="font-weight:400;color:#6b7280;">vs ${escP(opp||'-')}</span></div>
           <div style="display:flex;gap:8px;">
-            <div style="flex:1;text-align:center;background:#f8fafc;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#9ca3af;">1セット目</div><div style="font-size:18px;font-weight:700;color:#111;">${a!==''?a:'-'}</div></div>
-            <div style="flex:1;text-align:center;background:#f8fafc;border-radius:8px;padding:8px;"><div style="font-size:11px;color:#9ca3af;">2セット目</div><div style="font-size:18px;font-weight:700;color:#111;">${b!==''?b:'-'}</div></div>
+            ${setBox(1,a,oa)}
+            ${setBox(2,b,ob)}
           </div>
+          <div style="font-size:10.5px;color:#9ca3af;margin-top:5px;text-align:right;">自分 - 相手</div>
+          ${hasSheet?`<button class="btn btn-blue open-scoresheet" data-matchid="${escP(mid)}" data-back="tournamentInfo" data-label="${escP(sel.teamName||'')}" style="width:100%;margin-top:8px;padding:9px;font-size:13px;">📋 スコアシートを確認</button>`:''}
         </div>`;
       };
       body=`
         <div style="background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;">
           <div style="font-size:16px;font-weight:700;color:#111;margin-bottom:2px;">No.${sel.teamNo}　${sel.teamName||''}</div>
-          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:12px;">
-            <div style="text-align:center;background:#E1F5EE;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">勝利数</div><div style="font-size:20px;font-weight:700;color:#0a6e57;">${sel.wins||'0'}</div></div>
-            <div style="text-align:center;background:#f0fdf4;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">引分</div><div style="font-size:20px;font-weight:700;color:#16a34a;">${sel.draws||'0'}</div></div>
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;">
+            <div style="text-align:center;background:#f3f4f6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">総セット</div><div style="font-size:20px;font-weight:700;color:#374151;">${sel.sets!=null?sel.sets:'-'}</div></div>
+            <div style="text-align:center;background:#E1F5EE;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">勝利セット</div><div style="font-size:20px;font-weight:700;color:#0a6e57;">${sel.wins||'0'}</div></div>
+            <div style="text-align:center;background:#f0fdf4;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">引分セット</div><div style="font-size:20px;font-weight:700;color:#16a34a;">${sel.draws||'0'}</div></div>
+            <div style="text-align:center;background:#fee2e2;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">敗北セット</div><div style="font-size:20px;font-weight:700;color:#b91c1c;">${sel.losses!=null?sel.losses:'-'}</div></div>
             <div style="text-align:center;background:#fef3c7;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">合計点</div><div style="font-size:20px;font-weight:700;color:#d97706;">${sel.total||'0'}</div></div>
-            <div style="text-align:center;background:#faf5ff;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">順位</div><div style="font-size:20px;font-weight:700;color:#9333ea;">${sel.rank||'-'}</div></div>
+            <div style="text-align:center;background:#faf5ff;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">${S._tiPrelimConfirmed===true?'順位':'暫定順位'}</div><div style="font-size:20px;font-weight:700;color:#9333ea;">${sel.rank||'-'}</div></div>
           </div>
+          ${(()=>{ /* 【8-8】予選順位による進出先 */
+            const adv=advanceOfRank_(tiTour(),sel.rank);
+            if(!adv)return'';
+            const col=ADV_COLORS_[adv.i%ADV_COLORS_.length];
+            return S._tiPrelimConfirmed===true
+              ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:${col};font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">🎉 ${escP(adv.name)}に進出！</div>`
+              :`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${col}55;border:1.5px dashed ${col};font-size:14px;font-weight:700;color:#1a1a1a;text-align:center;">このままいくと <b>${escP(adv.name)}</b> に進出</div>`;
+          })()}
         </div>
         <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:10px;">各予選の結果</div>
-        ${(()=>{const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];const n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);let h='';for(let m=1;m<=n;m++){h+=setRow('予選'+NUM[m-1],sel['opp'+m]||'',sel['p'+m+'a']||'',sel['p'+m+'b']||'');}return h;})()}
+        ${(()=>{const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];const n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);let h='';for(let m=1;m<=n;m++){h+=setRow('予選'+NUM[m-1],sel['opp'+m]||'',sel['p'+m+'a']||'',sel['p'+m+'b']||'',m);}return h;})()}
       `;
     }
     else if(q){
@@ -7609,6 +8092,9 @@ function rTournamentInfo(){
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
         <div style="font-size:17px;font-weight:700;color:#111;">🏅 予選結果</div>
       </div>
+      ${prelimRankBtn}
+      ${prelimRankTable}
+      ${prelimNotice}
       ${searchBox}
       ${body}
     </div>`;
@@ -8422,6 +8908,48 @@ function renderCourtMapBlock(layout,highlightNo,matchId){
   </div>`;
 }
 
+/* 【8-8】送信済みの結果の中身（対戦カードの「送信済みの結果を確認する」を押したときに出る）。
+   セットごとの点数と勝ち負け。投擲の記録もあれば「スコアシートを確認」を出す。 */
+function sentResultHtml_(matchId,sent,card,nameA,nameB){
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const app=sent.app||[],sh=sent.sheet||[];
+  const pick=(rows,no,other)=>rows.find(x=>sameNo_(x.team_no,no))||(other?rows.find(x=>x!==other):rows[0])||null;
+  const aA=pick(app,card.teamA,null),aB=pick(app,card.teamB,aA);
+  const sA=sh.find(x=>sameNo_(x.team_no,card.teamA))||null,sB=sh.find(x=>sameNo_(x.team_no,card.teamB))||null;
+  /* シート（運営）の値。数字ならセットの点数、それ以外（勝ち・負けなど）は勝敗として扱う */
+  const isNum=v=>v!=null&&/^\d+$/.test(String(v).trim());
+  const sheetPts=r=>r?[r.v1,r.v2].filter(v=>isNum(v)).map(v=>String(v).trim()):[];
+  const sheetRes=r=>r?[r.v1,r.v2].find(v=>v!=null&&String(v).trim()!==''&&!isNum(v))||'':'';
+  const useSheet=!!(sA||sB);
+  const pa=useSheet?sheetPts(sA):((aA&&aA.set_pts)||[]);
+  const pb=useSheet?sheetPts(sB):((aB&&aB.set_pts)||[]);
+  const rA={result:useSheet?sheetRes(sA):(aA&&aA.result)},rB={result:useSheet?sheetRes(sB):(aB&&aB.result)};
+  const src=useSheet?'運営が反映した結果':'アプリで送信された結果';
+  const n=Math.max(pa.length,pb.length);
+  let sets='';
+  for(let i=0;i<n;i++){
+    if(pa[i]==null&&pb[i]==null)continue;
+    sets+=`<div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eef0f2;font-size:14px;">
+      <span style="width:72px;color:#6b7280;font-size:12px;">${i+1}セット目</span>
+      <span style="flex:1;text-align:center;font-weight:800;color:${C[0]};">${pa[i]==null?'-':esc(pa[i])}</span>
+      <span style="color:#9ca3af;">-</span>
+      <span style="flex:1;text-align:center;font-weight:800;color:${C[1]};">${pb[i]==null?'-':esc(pb[i])}</span>
+    </div>`;
+  }
+  const res=r=>r?esc(r.result||''):'';
+  const th=_throwsKnown[matchId];
+  return`<div style="margin-top:10px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;">
+    <div style="font-size:10.5px;color:#9ca3af;margin-bottom:4px;">${src}</div>
+    <div style="display:flex;justify-content:space-between;font-size:13px;font-weight:700;margin-bottom:6px;">
+      <span style="color:${C[0]};">${esc(nameA)}　${res(rA)}</span>
+      <span style="color:${C[1]};">${res(rB)}　${esc(nameB)}</span>
+    </div>
+    ${sets||(useSheet?'':'<div style="font-size:12px;color:#9ca3af;">セットの点数は届いていません</div>')}
+    ${th===true?`<button class="btn btn-blue open-scoresheet" data-matchid="${esc(matchId)}" data-back="courtSearch" style="width:100%;margin-top:10px;padding:10px;font-size:14px;">📋 スコアシートを確認</button>`
+      :(th===undefined?`<div style="font-size:11px;color:#9ca3af;margin-top:8px;text-align:center;">スコアシートの有無を確認中…</div>`:'')}
+  </div>`;
+}
+
 function rCourtSearch(){
   const q=S._courtSearchQuery||{teamNo:'',matchCode:''};
   const results=S._courtSearchResults||null;
@@ -8456,9 +8984,14 @@ function rCourtSearch(){
         const parts=r.matchId.split('_');
         const courtNo=parts[3]||'?';      // コートは4番目(index 3)
         const labels=resolveMatchLabels(tourSrc,r.matchId,r.tourneyCode||'');
-        return`<div class="card" style="padding:14px;margin-bottom:10px;">
+        /* 【8-8】結果送信済みの試合は、カードを暗くして
+             「この試合を開始する」の代わりに「送信済みの結果を確認」を出す。 */
+        const _sent=sentResultOf_(r.matchId);
+        const _sentOpen=!!(S._csSentOpen&&S._csSentOpen[r.matchId]);
+        return`<div class="card" style="padding:14px;margin-bottom:10px;${_sent?'background:#eceef1;border-color:#d5d9df;':''}">
+          ${_sent?`<div style="display:inline-block;font-size:11px;font-weight:800;color:#fff;background:#6b7280;border-radius:99px;padding:3px 10px;margin-bottom:8px;">✅ 結果送信済み</div>`:''}
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
-            <div style="background:#23AD82;color:#fff;border-radius:10px;padding:8px 14px;text-align:center;min-width:64px;">
+            <div style="background:${_sent?'#9ca3af':'#23AD82'};color:#fff;border-radius:10px;padding:8px 14px;text-align:center;min-width:64px;">
               <div style="font-size:11px;opacity:0.85;">コート</div>
               <div style="font-size:26px;font-weight:800;line-height:1.1;">${parseInt(courtNo)||courtNo}</div>
             </div>
@@ -8479,8 +9012,11 @@ function rCourtSearch(){
               <div style="font-size:11px;color:#9ca3af;">No.${r.teamB}</div>
             </div>
           </div>
-          ${_csLive?`<button class="btn btn-green cs-start-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;">この試合を開始する →</button>`
-            :`<div style="text-align:center;padding:9px;background:#f3f4f6;border-radius:8px;font-size:12px;color:#6b7280;">この大会はまだ始まっていません</div>`}
+          ${_sent
+            ?`<button class="btn cs-sent-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;background:#4b5563;color:#fff;border:none;">${_sentOpen?'▲ 閉じる':'送信済みの結果を確認する'}</button>
+              ${_sentOpen?sentResultHtml_(r.matchId,_sent,r,teamAName,teamBName):''}`
+            :(_csLive?`<button class="btn btn-green cs-start-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;">この試合を開始する →</button>`
+            :`<div style="text-align:center;padding:9px;background:#f3f4f6;border-radius:8px;font-size:12px;color:#6b7280;">この大会はまだ始まっていません</div>`)}
           ${renderCourtMapBlock(tourSrc.courtLayout,courtNo,r.matchId)}
         </div>`;
       }).join('');
@@ -9495,7 +10031,11 @@ function bind(){
   if(bsst)bsst.onclick=()=>{_scoreState.expanded=!_scoreState.expanded;render();};
 
   const bbksv=document.getElementById('btn-bk-score-view');
-  if(bbksv)bbksv.onclick=()=>{S.phase='scoreMatchList';render();};
+  if(bbksv)bbksv.onclick=()=>{
+    // 【8-8】予選結果・対戦カードから開いたときは、その画面にもどる
+    if(_scoreState.backTo){const b=_scoreState.backTo;_scoreState.backTo=null;S.phase=b;render();return;}
+    S.phase='scoreMatchList';render();
+  };
 
   // 大会選択
   const ssesel=document.getElementById('ss-event-select');
@@ -9536,6 +10076,7 @@ function bind(){
       const m=_scoreState.matchList[idx];
       if(!m)return;
       _scoreState.selectedMatch=m;
+      _scoreState.backTo=null;
       _scoreState.loading=true;_scoreState.scoreData=null;
       S.phase='scoreView';render();
       const d=await fetchViewData('getMatchScore',{matchId:m.matchId});
@@ -9623,9 +10164,10 @@ function bind(){
     if(!v){return;}
     if(!confirm(`場所「${v.code} : ${v.name||''}」を配信しますか？\n他の端末がこの内容を取り込めるようになります。`))return;
     const orig=btn.textContent;btn.disabled=true;btn.textContent='…';
+    _lastVenueSbMsg='';
     const ok=await publishVenue(v,{silent:true}).catch(()=>false);
     btn.disabled=false;btn.textContent=orig;
-    alert(ok?'✅ 場所を配信しました。':'❌ 配信に失敗しました。GitHub Tokenをご確認ください。');
+    alert(ok?('✅ 場所を配信しました。'+_lastVenueSbMsg):'❌ 配信に失敗しました。GitHub Tokenをご確認ください。');
   }));
   // 各場所：最新に更新（配信された最新の場所情報を取り込んで上書き）
   document.querySelectorAll('.admin-refresh-venue').forEach(btn=>btn.addEventListener('click',async()=>{
@@ -9934,6 +10476,17 @@ function bind(){
       }
       tour.exhibition={enabled:exEn?(exEn.value==='1'):cur.enabled,count:n,games:games};
     }
+    // 【8-8】予選順位による進出先
+    if(document.querySelector('.te-adv-from')){
+      const adv=[];
+      document.querySelectorAll('.te-adv-from').forEach(el=>{
+        const i=el.dataset.i;
+        const q=c=>document.querySelector('.'+c+'[data-i="'+i+'"]');
+        adv.push({from:parseInt(el.value,10)||'',to:parseInt((q('te-adv-to')||{}).value,10)||'',
+                  tourneyCode:String((q('te-adv-code')||{}).value||''),label:String((q('te-adv-label')||{}).value||'').trim()});
+      });
+      tour.advanceRules=adv;
+    }
     const b1nEl=document.getElementById('te-bracket1-name');if(b1nEl)tour.bracket1Name=b1nEl.value.trim()||'決勝トーナメント';
     const b2cEl=document.getElementById('te-bracket2-count');if(b2cEl)tour.bracket2TeamCount=Number(b2cEl.value)||0;
     const b2nEl=document.getElementById('te-bracket2-name');if(b2nEl)tour.bracket2Name=b2nEl.value.trim()||'Bトーナメント';
@@ -9980,6 +10533,28 @@ function bind(){
   if(exCntEl)exCntEl.addEventListener('change',()=>{
     const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
     captureBasicFields(tour);saveActiveTour(tour);render();
+  });
+  // 【8-8】予選順位による進出先：追加・削除・入力の保存
+  const tadv=document.getElementById('te-adv-add');
+  if(tadv)tadv.onclick=()=>{
+    const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+    captureBasicFields(tour);
+    const cur=advanceRulesOf_(tour);
+    const last=cur[cur.length-1];
+    cur.push({from:last&&last.to?last.to+1:1,to:'',tourneyCode:'',label:''});
+    tour.advanceRules=cur;saveActiveTour(tour);render();
+  };
+  document.querySelectorAll('.te-adv-del').forEach(b=>b.onclick=()=>{
+    const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+    captureBasicFields(tour);
+    const cur=advanceRulesOf_(tour);cur.splice(parseInt(b.dataset.i,10),1);
+    tour.advanceRules=cur;saveActiveTour(tour);render();
+  });
+  document.querySelectorAll('.te-adv-from,.te-adv-to,.te-adv-code,.te-adv-label').forEach(el=>{
+    el.addEventListener('change',()=>{
+      const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
+      captureBasicFields(tour);saveActiveTour(tour);
+    });
   });
   // 交流戦：名前・説明の入力を保存
   document.querySelectorAll('.te-exh-name,.te-exh-desc').forEach(el=>{
@@ -10525,6 +11100,8 @@ function bind(){
     /* 「いまの大会」を切り替えるのは、開催中の大会のときだけ。
        開催前の大会を見ただけで受付の相手などがすり替わらないようにするため。 */
     if(tour&&isLiveEventCode(eventCode)){AD.activeTourId=tour.id;saveAdmin(AD);}
+    // 【8-8】送信済みの結果（アプリで送られたもの）も読んでおく。対戦カードを暗くするのに使う
+    if(tour)await loadSentResults_(tour,true);
     if(S.phase!=='courtSearch'){S._csLoading=false;return;}
     // 受付済みチームが今の大会と一致していれば、自動でそのチームの結果を表示
     const my=getValidMyTeam(eventCode);
@@ -10534,7 +11111,10 @@ function bind(){
     }
     S._csLoading=false;render();
   }
-  const bgcs=document.getElementById('btn-go-court-search');if(bgcs)bgcs.onclick=()=>openCourtSearch('');
+  /* 【8-8】「対戦コートを検索」は「送信済みの試合を確認」に変わった。中身はまだ準備中。
+       対戦コートは、大会カードの「対戦相手・コートを検索」から探せる。 */
+  const bgcs=document.getElementById('btn-go-court-search');
+  if(bgcs)bgcs.onclick=()=>alert('「送信済みの試合を確認」は準備中です。\n\n対戦コートは、大会カードの「🔍 対戦相手・コートを検索」から探せます。');
   // ホーム：パーソナライズ解除
   const bcmt=document.getElementById('btn-clear-myteam');
   if(bcmt)bcmt.onclick=()=>{clearMyTeam();render();};
@@ -10613,9 +11193,8 @@ function bind(){
         S._tiSections=json.sections||null;
         S._tiRegulation=json.regulation||'';
       } else if(view==='prelim'){
-        const json=await fetchTournamentInfo('getPrelim');
-        if(json.error)throw new Error('GAS: '+json.error);
-        S._tiPrelim=json.teams||[];S._tiPrelimMatches=prelimMatchCountOf(json);
+        // 【8-8】結果反映シート＋アプリの結果から計算（無ければ「予選結果を配信」の内容）。確定の印もここで読む
+        await loadPrelimView_();
         // パーソナライズ済みなら自分のチームNoを自動入力して検索結果を表示
         const myP=getValidMyTeam(eventCode);
         if(myP&&myP.teamId){
@@ -10706,6 +11285,23 @@ function bind(){
   // 対戦コート：他チーム検索の折りたたみトグル
   const bcst=document.getElementById('btn-cs-toggle');
   if(bcst)bcst.onclick=()=>{S._courtSearchExpanded=!S._courtSearchExpanded;render();};
+  /* 【8-8】送信済みの結果を開く／閉じる。開いたときに、スコアシートがあるかを確かめる */
+  document.querySelectorAll('.cs-sent-btn').forEach(btn=>{
+    btn.onclick=async()=>{
+      const mid=btn.dataset.matchid;
+      S._csSentOpen=S._csSentOpen||{};
+      S._csSentOpen[mid]=!S._csSentOpen[mid];
+      render();
+      if(S._csSentOpen[mid]&&_throwsKnown[mid]===undefined){
+        await loadThrowsKnown_([mid]);
+        if(S.phase==='courtSearch')render();
+      }
+    };
+  });
+  /* 【8-8】「スコアシートを確認」（対戦カード・予選結果の両方から） */
+  document.querySelectorAll('.open-scoresheet').forEach(btn=>{
+    btn.onclick=()=>openScoreSheetFor_(btn.dataset.matchid,btn.dataset.back||'setup',btn.dataset.label||'');
+  });
   document.querySelectorAll('.cs-start-btn').forEach(btn=>{
     btn.addEventListener('click',async()=>{
       const mid=btn.dataset.matchid;
@@ -10753,6 +11349,7 @@ function bind(){
     delete _jsonCache['settings_'+ec];     // 大会の設定
     delete _jsonCache['settings_raw_'+ec];
     bcsRef.textContent='取得中...';bcsRef.disabled=true;
+    await loadSentResults_(atour,true);   // 【8-8】送信済みの結果も読み直す
     await syncAllFromGitHub(ec);
     render();
   };
@@ -11155,15 +11752,26 @@ function bind(){
   if(btipr)btipr.onclick=async()=>{
     S._tiView='prelim';S._tiLoading=true;S._tiError=null;S._tiPrelim=[];S._tiPrelimQuery='';S._tiPrelimSelected=null;render();
     try{
-      const json=await fetchTournamentInfo('getPrelim');
-      if(json.error)throw new Error('GAS: '+json.error);
-      S._tiPrelim=json.teams||[];S._tiPrelimMatches=prelimMatchCountOf(json);
+      await loadPrelimView_();   // 【8-8】
     }catch(e){S._tiError='取得に失敗しました: '+e.message;}
     S._tiLoading=false;render();
   };
   // 試合システム図（残り試合数）：ローカル同期済み設定から表示
   const btisys=document.getElementById('btn-ti-system');
   if(btisys)btisys.onclick=()=>{S._tiView='system';S._tiLoading=false;S._tiError=null;render();};
+  // 【8-8】予選のランキングを開く／閉じる
+  const bprk=document.getElementById('btn-prelim-rank');
+  if(bprk)bprk.onclick=()=>{S._tiPrelimRankOpen=!S._tiPrelimRankOpen;render();};
+  // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
+  if(S.phase==='tournamentInfo'&&S._tiView==='prelim'&&S._tiPrelimSelected){
+    const _t=tiTour(),_sel=S._tiPrelimSelected;
+    const _n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);
+    const _ids=[];
+    for(let m=1;m<=_n;m++){if(_sel['mid'+m]){_ids.push(_sel['mid'+m]);continue;}const mt=prelimMatchOf_(_t,_sel.teamNo,m);if(mt)_ids.push(mt.matchId);}
+    if(_ids.some(id=>_throwsKnown[id]===undefined)){
+      loadThrowsKnown_(_ids).then(ok=>{if(ok&&S.phase==='tournamentInfo'&&S._tiView==='prelim')render();});
+    }
+  }
   // 予選結果 - 検索
   const tpi=document.getElementById('ti-prelim-input');
   const tps=document.getElementById('ti-prelim-search');
