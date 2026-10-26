@@ -866,7 +866,7 @@ async function callReceptionGas(action,params={}){
 
 async function fetchCombinedIds(){
   const btn=document.getElementById('btn-fetch-combined');
-  if(btn){btn.disabled=true;btn.textContent='取得中...';}
+  if(btn){lockBtnSize_(btn);btn.disabled=true;btn.textContent='取得中...';}
   try{
     const tour=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):activeTour();
     const fetchUrl=tour&&tour.gasUrl&&tour.gasUrl.trim();
@@ -2587,7 +2587,7 @@ function submitErrorHint_(msg){
 
 async function handleSubmitAndReset(){
   const btn=document.getElementById('btn-submit-reset');
-  if(btn){btn.disabled=true;btn.textContent='送信中...';}
+  if(btn){lockBtnSize_(btn);btn.disabled=true;btn.textContent='送信中...';}
   S._submitError='';S._submitErrorHint='';
   let result=null;
   let isDup=false;
@@ -3359,6 +3359,17 @@ function maybeSyncPickTours_(){
   });
 }
 
+/* 【2026-10-26】押したあとに文字が「確認中…」「取得中...」などに変わるボタンの大きさを、押す前のまま固定する
+   （文字が変わったとたんにボタンが縮んだり伸びたりしないように） */
+function lockBtnSize_(b){
+  try{
+    if(!b||!b.getBoundingClientRect)return;
+    const r=b.getBoundingClientRect();
+    if(r.width)b.style.minWidth=Math.ceil(r.width)+'px';
+    if(r.height)b.style.minHeight=Math.ceil(r.height)+'px';
+    b.style.boxSizing='border-box';
+  }catch(e){}
+}
 function rSetup(){
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
@@ -6116,7 +6127,7 @@ async function publishSettings(tour,opts){
   const apiUrl='https://api.github.com/repos/longbeachknit/molkkymania-deta/contents/'+fileName;
 
   const btn=document.getElementById('btn-publish-settings');
-  if(btn&&!silent){btn.disabled=true;btn.textContent='配信中...';}
+  if(btn&&!silent){lockBtnSize_(btn);btn.disabled=true;btn.textContent='配信中...';}
 
   try{
     // 既存ファイルのSHAを取得
@@ -10375,7 +10386,7 @@ function bind(){
   // ssSaveConfirm: 保存する/しない
   const bSSyes=document.getElementById('btn-ss-save-yes');
   if(bSSyes)bSSyes.onclick=async()=>{
-    bSSyes.disabled=true;bSSyes.textContent='保存中...';
+    lockBtnSize_(bSSyes);bSSyes.disabled=true;bSSyes.textContent='保存中...';
     await saveScoresheet();
     S.phase=S._ssSaveDest||'matchOver';S._ssSaveDest=null;render();
   };
@@ -10827,7 +10838,7 @@ function bind(){
   if(bvimp)bvimp.onclick=async()=>{
     const code=(document.getElementById('admin-venue-import').value||'').trim();
     if(!code){alert('場所IDを入力してください（例: 01）');return;}
-    const orig=bvimp.textContent;bvimp.disabled=true;bvimp.textContent='取り込み中...';
+    const orig=bvimp.textContent;lockBtnSize_(bvimp);bvimp.disabled=true;bvimp.textContent='取り込み中...';
     const ok=await syncVenueFromGitHub(code).catch(()=>false);
     bvimp.disabled=false;bvimp.textContent=orig;
     if(ok){render();alert('✅ 場所を取り込みました。\n下の一覧に反映されます。');}
@@ -10880,7 +10891,7 @@ function bind(){
   if(bimp)bimp.onclick=async()=>{
     const eid=(document.getElementById('admin-import-event').value||'').trim();
     if(!eid){alert('大会IDを入力してください（例: 0601）');return;}
-    const orig=bimp.textContent;bimp.disabled=true;bimp.textContent='取り込み中...';
+    const orig=bimp.textContent;lockBtnSize_(bimp);bimp.disabled=true;bimp.textContent='取り込み中...';
     const ok=await syncSettingsFromGitHub(eid,true).catch(()=>false);
     bimp.disabled=false;bimp.textContent=orig;
     if(ok){render();alert('✅ 取り込みました。\n下の大会一覧に表示されます。');}
@@ -10909,7 +10920,7 @@ function bind(){
   document.querySelectorAll('.admin-refresh-tour').forEach(btn=>btn.addEventListener('click',async()=>{
     const code=btn.dataset.code;
     if(!code){alert('大会コードが設定されていません');return;}
-    const orig=btn.textContent;btn.disabled=true;btn.textContent='更新中...';
+    const orig=btn.textContent;lockBtnSize_(btn);btn.disabled=true;btn.textContent='更新中...';
     const ok=await syncSettingsFromGitHub(code,true).catch(()=>false);
     btn.disabled=false;btn.textContent=orig;
     if(ok){saveAdmin(AD);render();alert('✅ 最新の内容に更新しました。');}
@@ -10982,7 +10993,7 @@ function bind(){
     });
     if(keys.length&&!confirm('新アプリの「開催中」を、この'+keys.length+'件に置き換えます。よろしいですか？\n（従来アプリには影響しません）'))return;
     if(!keys.length&&!confirm('新アプリの「開催中」を、すべて解除します。よろしいですか？\n（従来アプリには影響しません）'))return;
-    const orig=bsl.textContent;bsl.disabled=true;bsl.textContent='反映中…';
+    const orig=bsl.textContent;lockBtnSize_(bsl);bsl.disabled=true;bsl.textContent='反映中…';
     try{
       const res=await fetch(SB_URL+'/rest/v1/rpc/set_live_events',{
         method:'POST',
@@ -11027,7 +11038,7 @@ function bind(){
       if(!_upKey()){alert('配信キーが入っていません。\n下の「📡 新アプリの開催中リスト」の欄に配信キーを入れてから、もう一度押してください。');return;}
       const tour=AD.tournaments&&AD.tournaments.find(t=>((t.venueCode?t.venueCode+'_':'')+t.eventCode)===k);
       if(!confirm(`大会コード「${code}」を「開催前の大会」にしますか？\n参加者のホームにカードが出て、会場・対戦相手を先に見られるようになります。\n（受付と試合開始は、開催中にするまでできません）\n（新アプリだけの設定です。従来アプリには影響しません）`))return;
-      const orig=btn.textContent;btn.disabled=true;btn.textContent='送信中...';
+      const orig=btn.textContent;lockBtnSize_(btn);btn.disabled=true;btn.textContent='送信中...';
       let settingsOk=true;
       if(tour)settingsOk=await publishSettings(tour,{silent:true});
       const keys=upcomingKeysNow_(AD).filter(x=>x!==k).concat([k]);
@@ -11058,7 +11069,7 @@ function bind(){
       if(!code){alert('大会コードが設定されていません');return;}
       const tour=AD.tournaments&&AD.tournaments.find(t=>t.eventCode===code);
       if(confirm(`大会コード「${code}」を配信中にしますか？\n参加者が試合開始・コート検索できるようになります。`)){
-        const orig=btn.textContent;btn.disabled=true;btn.textContent='配信中...';
+        const orig=btn.textContent;lockBtnSize_(btn);btn.disabled=true;btn.textContent='配信中...';
         // ① 大会設定（ルール・チーム・試合開催期間など）を先に配信
         let settingsOk=true;
         if(tour)settingsOk=await publishSettings(tour,{silent:true});
@@ -11393,7 +11404,7 @@ function bind(){
       }
     }
     let label=null;
-    if(triggerBtn){label=triggerBtn.textContent;triggerBtn.disabled=true;triggerBtn.textContent='保存・配信中...';}
+    if(triggerBtn){label=triggerBtn.textContent;lockBtnSize_(triggerBtn);triggerBtn.disabled=true;triggerBtn.textContent='保存・配信中...';}
     let published=false;
     if(tour.eventCode){
       published=await publishSettings(tour,{silent:true});
@@ -11740,7 +11751,7 @@ function bind(){
     // 押した瞬間にボタン表示を変えて反応を返す
     const miOrig=bgmi.innerHTML;
     bgmi.disabled=true;bgmi.style.opacity='0.6';
-    bgmi.innerHTML='<span style="font-size:22px;">⏳</span><div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">確認中...</div>';
+    lockBtnSize_(bgmi);bgmi.textContent='確認中…';   // 【2026-10-26】大きさを変えずに1行で
     const miRestore=()=>{bgmi.disabled=false;bgmi.style.opacity='';bgmi.innerHTML=miOrig;};
     const eventCode=await resolveActiveEventCode();
     if(!eventCode){
@@ -11928,7 +11939,7 @@ function bind(){
     // 押した瞬間にボタン表示を変えて反応を返す
     const roOrig=bgro.innerHTML;
     bgro.disabled=true;bgro.style.opacity='0.6';
-    bgro.innerHTML='<span style="font-size:22px;">⏳</span><div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">確認中...</div>';
+    lockBtnSize_(bgro);bgro.textContent='確認中…';   // 【2026-10-26】大きさを変えずに1行で
     const roRestore=()=>{bgro.disabled=false;bgro.style.opacity='';bgro.innerHTML=roOrig;};
     const eventCode=await resolveActiveEventCode();
     if(!eventCode){
@@ -12032,7 +12043,7 @@ function bind(){
       const fmt=d=>`${d.getMonth()+1}月${d.getDate()}日 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
       if(now<start){alert(`試合開催期間は${fmt(start)}からです。`);return;}
       if(now>end){alert('今大会の試合開催期間は終了しました。');return;}
-      btn.disabled=true;btn.textContent='取得中...';
+      lockBtnSize_(btn);btn.disabled=true;btn.textContent='取得中...';
       const parts=mid.split('_');
       if(parts.length>=2)await syncAllFromGitHub(parts[1]);
       const result=resolveMatchId(mid);
@@ -12055,7 +12066,7 @@ function bind(){
     delete _jsonCache[ec];                 // 対戦カード
     delete _jsonCache['settings_'+ec];     // 大会の設定
     delete _jsonCache['settings_raw_'+ec];
-    bcsRef.textContent='取得中...';bcsRef.disabled=true;
+    lockBtnSize_(bcsRef);bcsRef.textContent='取得中...';bcsRef.disabled=true;
     await loadSentResults_(atour,true);   // 【8-8】送信済みの結果も読み直す
     await syncAllFromGitHub(ec);
     render();
@@ -12105,7 +12116,7 @@ function bind(){
     S._matchIdError='';S._matchIdInput=id;
     const eventCode=parts[1];
     const btn=document.getElementById('btn-matchid-go');
-    if(btn){btn.disabled=true;btn.textContent='取得中...';}
+    if(btn){lockBtnSize_(btn);btn.disabled=true;btn.textContent='取得中...';}
     await syncAllFromGitHub(eventCode);
     if(btn){btn.disabled=false;btn.textContent='この試合IDで開始 →';}
     const result=resolveMatchId(id);
@@ -12131,7 +12142,7 @@ function bind(){
     if(parts.length<4){S._matchIdError='試合IDの形式が正しくありません（例: 01_0602_02_002）';S._matchIdInput=id;render();return;}
     S._matchIdError='';S._matchIdInput=id;
     const btn=document.getElementById('btn-ro-matchid-go');
-    if(btn){btn.disabled=true;btn.textContent='取得中...';}
+    if(btn){lockBtnSize_(btn);btn.disabled=true;btn.textContent='取得中...';}
     await syncAllFromGitHub(parts[1]);
     if(btn){btn.disabled=false;btn.textContent='この試合IDで進む →';}
     const result=resolveMatchId(id);
