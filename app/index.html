@@ -3,6 +3,19 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
+<script>
+/* 【2026-10-26】LINE の中のブラウザで開かれたら、ふだんのブラウザ（iPhone は Safari、Android は Chrome など）で開き直す。
+   LINE は、アドレスに openExternalBrowser=1 を付けると、外のブラウザで開く。
+   付けても LINE の中のままだったとき（古い LINE など）は、くり返さない（ホームに案内を出す）。 */
+(function(){try{
+  var ua=navigator.userAgent||'';
+  if(!/\bLine\//i.test(ua))return;
+  var u=new URL(location.href);
+  if(u.searchParams.get('openExternalBrowser')==='1')return;
+  u.searchParams.set('openExternalBrowser','1');
+  location.replace(u.toString());
+}catch(e){}})();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
 <meta charset="UTF-8"/>
@@ -3294,6 +3307,43 @@ function liveMatchBtnsHtml(tour,theme,extra,pos){
     </div>`;
 }
 
+/* 【2026-10-26】文の中の https://〜 を、押せるリンクにする（新しいタブで開く） */
+function linkify_(html){
+  return String(html==null?'':html).replace(/(https?:\/\/[^\s<>"'、。，）」』】]+)/g,
+    u=>`<a href="${u}" target="_blank" rel="noopener" style="color:#2563eb;text-decoration:underline;word-break:break-all;">${u}</a>`);
+}
+/* 【2026-10-26】LINE・Instagram などのアプリの中のブラウザで開いているか（名前を返す。ふつうのブラウザなら ''）
+   LINE はふつう、ページのいちばん最初で外のブラウザに開き直す。開き直せなかったときだけ、ここで案内を出す。 */
+function inAppName_(){
+  const ua=navigator.userAgent||'';
+  if(/\bLine\//i.test(ua))return 'LINE';
+  if(/Instagram/i.test(ua))return 'Instagram';
+  if(/FBAN|FBAV|FB_IAB|FBIOS/i.test(ua))return 'Facebook';
+  if(/MicroMessenger/i.test(ua))return 'WeChat';
+  if(/\bTwitter/i.test(ua))return 'X（Twitter）';
+  return '';
+}
+function inAppBannerHtml_(){
+  const nm=inAppName_();
+  if(!nm)return '';
+  const ua=navigator.userAgent||'';
+  const ios=/iPhone|iPad|iPod/i.test(ua),android=/Android/i.test(ua);
+  const br=ios?'Safari':(android?'Chrome':'Safari や Chrome');
+  const how=ios?'画面の右下（または右上）の「…」や共有のボタンから、「Safariで開く」または「ブラウザで開く」を選んでください。'
+              :'画面の右上の「︙」から、「ブラウザで開く」または「Chromeで開く」を選んでください。';
+  return`<div style="margin-bottom:16px;padding:12px 14px;background:#FFF3C4;border:1.5px solid #FFCB3D;border-radius:12px;font-size:13px;line-height:1.7;color:#1a1a1a;">
+    <b>${nm}の中で開いています。</b><br>うまく動かないことがあるので、<b>${br}</b>で開き直してください。
+    <div style="font-size:12px;color:#6b7280;margin-top:4px;">${how}</div>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      ${android?'<button id="btn-open-chrome" style="flex:1;padding:9px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">Chromeで開く</button>':''}
+      <button id="btn-copy-url" style="flex:1;padding:9px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">アドレスをコピー</button>
+    </div>
+  </div>`;
+}
+function inAppCleanUrl_(){
+  try{const u=new URL(location.href);u.searchParams.delete('openExternalBrowser');return u.toString();}catch(e){return location.href;}
+}
+
 function rSetup(){
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
@@ -3387,7 +3437,7 @@ function rSetup(){
   const _eventCard=`<div style="margin-bottom:20px;padding:14px 16px;background:${_themeBg};border:1.5px solid ${_theme};border-radius:14px;">
     <div style="display:flex;align-items:stretch;gap:12px;">
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;">
-        <div style="font-size:11px;color:#8a6d00;font-weight:800;letter-spacing:0.04em;">📣 開催中の大会</div>
+        <div style="font-size:11px;color:#8a6d00;font-weight:800;letter-spacing:0.04em;">開催中の大会</div>
         <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.35;margin-top:3px;">${_nameHtml}</div>
         ${_venueName?`<div style="font-size:13px;color:#6b7280;margin-top:7px;line-height:1.5;">📍 ${escH(_venueName)}</div>`:''}
         ${_period?`<div style="font-size:13px;color:#6b7280;margin-top:2px;line-height:1.5;">🗓 ${escH(_period)}</div>`:''}
@@ -3450,7 +3500,7 @@ function rSetup(){
   // 開催中の大会があるときだけカードを出す。無ければテンプレは表示しない。
   const topBlock=_needPick
     ?`<div style="margin-bottom:20px;">
-        <div style="font-size:13px;font-weight:800;color:#8a6d00;margin-bottom:10px;">📣 いま${_lives.length}つの大会が開催中です。見たい方を選んでください。</div>
+        <div style="font-size:13px;font-weight:800;color:#8a6d00;margin-bottom:10px;">いま${_lives.length}つの大会が開催中です。</div>
         ${_lives.map(_pickCard).join('')}
       </div>`
     :(_liveTour
@@ -3471,6 +3521,7 @@ function rSetup(){
         <div style="font-size:10px;color:#8a6d00;font-weight:800;white-space:nowrap;">ver.${APP_VERSION}</div>
       </div>
     </div>
+    ${inAppBannerHtml_()}
     ${topBlock}
     <!-- 【8-8】「試合」の欄のボタンは、開催中の大会のカードの中へ移した（liveMatchBtnsHtml） -->
     ${_upcomingCard}
@@ -7655,7 +7706,7 @@ function rTournamentInfo(){
              <span style="font-size:20px;">${icon}</span>
              <span style="font-size:15px;font-weight:800;color:#111;">${esc(label)}</span>
            </div>
-           <div style="font-size:14px;color:#374151;line-height:1.7;white-space:pre-wrap;">${esc(text)}</div>
+           <div style="font-size:14px;color:#374151;line-height:1.7;white-space:pre-wrap;">${linkify_(esc(text))}</div>
          </div>` : '';
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
@@ -8004,7 +8055,7 @@ function rTournamentInfo(){
     // 箇条書き行（・で始まる）の折り返しにインデントを付ける関数
     function fmtContent(str){
       return str.split('\n').map(line=>{
-        const trimmed=line.trimStart();
+        const trimmed=linkify_(line.trimStart());   // 【2026-10-26】https://〜 を押せるリンクに
         if(trimmed.startsWith('・')){
           return`<div style="display:flex;gap:0;margin-bottom:4px;"><span style="flex-shrink:0;">・</span><span style="flex:1;">${trimmed.slice(1)}</span></div>`;
         }
@@ -11743,6 +11794,15 @@ function bind(){
   const bgcs=document.getElementById('btn-go-court-search');
   if(bgcs)bgcs.onclick=()=>openCourtSearch(bgcs.dataset.evcode||'',{sentOnly:true});   // 【2026-10-26】中身を作った
   // ホーム：パーソナライズ解除
+  // 【2026-10-26】アプリの中のブラウザの案内のボタン
+  const boc=document.getElementById('btn-open-chrome');
+  if(boc)boc.onclick=()=>{try{const u=new URL(inAppCleanUrl_());location.href='intent://'+u.host+u.pathname+u.search+'#Intent;scheme=https;package=com.android.chrome;end';}catch(e){}};
+  const bcu=document.getElementById('btn-copy-url');
+  if(bcu)bcu.onclick=async()=>{
+    const url=inAppCleanUrl_();
+    try{await navigator.clipboard.writeText(url);bcu.textContent='コピーしました';}
+    catch(e){window.prompt('このアドレスをコピーして、'+(/iPhone|iPad|iPod/i.test(navigator.userAgent)?'Safari':'Chrome')+'に貼り付けてください',url);}
+  };
   const bcmt=document.getElementById('btn-clear-myteam');
   // 【2026-10-26】いま表示している大会の受付だけを解除（ほかの大会の受付は残す）
   if(bcmt)bcmt.onclick=()=>{const _lt=posLiveTour_()||activeTour();clearMyTeam(_lt?_lt.eventCode:null);render();};
