@@ -3191,13 +3191,12 @@ function rBeginner(){
     +appStep('6-7','そのほか、知りたいことがあるとき',
       P('ホーム画面のボタンから、たいていのことは調べられます。')
       +TBL(['知りたいこと','押すボタン'],
-        [['<b>今日のルール</b>','📜 レギュレーション'],
-         ['<b>次の試合は何時から？</b>','🕐 タイムスケジュール'],
-         ['<b>あと何回勝てば優勝？</b>','📊 残り試合数を確認'],
-         ['<b>予選の順位は？</b>','🏅 予選結果を確認'],
-         ['<b>トーナメントの状況は？</b>','🏆 トーナメント表'],
-         ['<b>チームナンバーが分からない</b>','🪪 チームNoを検索'],
-         ['<b>トイレ・駐車場・行き方は？</b>','📍 会場の詳細'],
+        [['<b>今日のルール</b>','レギュレーション'],
+         ['<b>次の試合は何時から？</b>','タイムスケジュール'],
+         ['<b>あと何回勝てば優勝？</b>','残り試合数を確認'],
+         ['<b>予選の順位は？</b>','予選成績を確認'],
+         ['<b>トーナメントの状況は？</b>','トーナメント表'],
+         ['<b>トイレ・駐車場・行き方は？</b>','会場の詳細'],
          ['<b>自分の成績を見たい</b>','📊 成績を見る'],
          ['<b>過去の試合の記録を見たい</b>','📋 スコアシートを見る']])
       +P('「📊 成績を見る」のボタンは大会終了後に情報が更新されます。')
@@ -3233,18 +3232,19 @@ function rBeginner(){
    どのカードのボタンかは data-evcode（その大会のコード）で見分ける。
    「対戦相手を検索」だけ横長（左右の幅を結合）にして、一番下に置く。 */
 function eventCardBtnsHtml(tour,theme,opts){
+  /* 【2026-10-26】開催中のカード：絵文字なし・「チームNoを検索」は出さない（2列×4段の8つにする） */
   const live=!!(opts&&opts.live);   // 開催中のカード：「対戦相手・コートを検索」は上の試合ボタンの並びにあるので出さない
   const code=String((tour&&tour.eventCode)||'');
   const w=isSinglesTour(tour)?'選手':'チーム';
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const b=(cls,label,wide)=>`<button class="${cls}" data-evcode="${esc(code)}" style="${wide?'grid-column:1 / -1;':''}padding:10px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${theme};border-radius:10px;color:#1a1a1a;cursor:pointer;">${label}</button>`;
-  return`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:${live?8:12}px;">
-    ${b('card-btn-venue','📍 会場の詳細')}
-    ${b('card-btn-tourinfo','📋 大会の詳細')}
-    ${b('card-btn-schedule','🕐 タイムスケジュール')}
-    ${b('card-btn-regulation','📜 レギュレーション')}
-    ${b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
-    ${b('card-btn-sheet','📑 大会スプレッドシート')}
+  return`<div style="${live?'display:contents;':'display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:12px;'}">
+    ${b('card-btn-venue',(live?'':'📍 ')+'会場の詳細')}
+    ${b('card-btn-tourinfo',(live?'':'📋 ')+'大会の詳細')}
+    ${b('card-btn-schedule',(live?'':'🕐 ')+'タイムスケジュール')}
+    ${b('card-btn-regulation',(live?'':'📜 ')+'レギュレーション')}
+    ${live?'':b('card-btn-teamsearch','🪪 '+w+'Noを検索')}
+    ${b('card-btn-sheet',(live?'':'📑 ')+'大会スプレッドシート')}
     ${live?'':b('card-btn-opponent','🔍 対戦相手・コートを検索',true)}
   </div>`;
 }
@@ -3254,7 +3254,7 @@ function eventCardBtnsHtml(tour,theme,opts){
    ボタンの id は前と同じなので、押したときの動きは変わらない。
    ※「対戦コートを検索」は「送信済みの試合を確認」に名前を変えた（中身は準備中）。
      対戦コートは、カードの「対戦相手・コートを検索」から探せる。 */
-function liveMatchBtnsHtml(tour,theme){
+function liveMatchBtnsHtml(tour,theme,extra){
   /* 【2026-10-26】見た目を「会場の詳細」などのボタンとそろえた（白地・大会の色の枠）。
      よく使う3つ（QRコードで試合開始・試合結果のみを送信・対戦相手・コートを検索）は横いっぱいにして上に置く。
      「対戦相手・コートを検索」は下の詳細ボタンの並びから、ここへ移した。 */
@@ -3266,10 +3266,11 @@ function liveMatchBtnsHtml(tour,theme){
       ${b('btn-go-matchid','📷 QRコードで試合開始',true)}
       ${b('btn-go-result-only','📤 試合結果のみを送信',true)}
       <button class="card-btn-opponent" data-evcode="${esc(code)}" style="${st(true)}">🔍 対戦相手・コートを検索</button>
-      ${b('btn-go-prelim','🏅 予選結果を確認')}
-      ${b('btn-go-remaining','📊 残り試合数を確認')}
-      ${b('btn-go-bracket','🏆 トーナメント表')}
-      ${b('btn-go-court-search','📨 送信済みの試合を確認')}
+      ${b('btn-go-prelim','予選成績を確認',true)}
+      ${b('btn-go-remaining','残り試合数を確認')}
+      ${b('btn-go-bracket','トーナメント表')}
+      <button id="btn-go-court-search" data-evcode="${esc(code)}" style="${st(false)}">送信済みの試合を確認</button>
+      ${extra||''}
     </div>`;
 }
 
@@ -3373,8 +3374,7 @@ function rSetup(){
       </div>
       ${_rightSide}
     </div>
-    ${liveMatchBtnsHtml(_liveTour,_theme)}
-    ${eventCardBtnsHtml(_liveTour,_theme,{live:true})}
+    ${liveMatchBtnsHtml(_liveTour,_theme,eventCardBtnsHtml(_liveTour,_theme,{live:true}))}
     ${_exhBtn}
   </div>`;
 
@@ -7831,14 +7831,34 @@ function rTournamentInfo(){
 
       const parts=[];
       const x0=LABEL_W;
+      /* 【2026-10-26】チーム名は「文字数」ではなく「実際の文字の幅」で測る。
+           半角は全角のおよそ半分の幅なので、半角の名前もたくさん入る。
+           1行に入らないときは、少し小さい字で2行にする。それでも入らない分だけ「…」にする。 */
+      const NAME_W=LABEL_W-12;
       function nameText(t,x,y){
-        /* 【8-8】文字数は「&」などを置き換える前の名前で数える。
-             置き換えたあとで数えると「&」が5文字ぶんに数えられ、
-             切る位置によっては表示が崩れていた。 */
         const raw=String(t||'').trim();
         if(raw==='')return '';
-        const s=raw.length>12?esc(raw.slice(0,12))+'…':esc(raw);
-        return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="10" fill="#111">${s}</text>`;
+        if(brTextW_(raw,10)<=NAME_W)
+          return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="10" fill="#111">${esc(raw)}</text>`;
+        const c1=brFitCut_(raw,9,NAME_W);
+        if(c1[1]==='')   // 小さい字なら1行に入る
+          return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="9" fill="#111">${esc(raw)}</text>`;
+        let l2=c1[1];
+        if(brTextW_(l2,9)>NAME_W)l2=brFitCut_(l2,9,NAME_W-brTextW_('…',9))[0]+'…';
+        return `<text x="${x}" y="${y-5}" dominant-baseline="central" font-size="9" fill="#111">${esc(c1[0])}</text>`
+              +`<text x="${x}" y="${y+5}" dominant-baseline="central" font-size="9" fill="#111">${esc(l2)}</text>`;
+      }
+      /* 【2026-10-26】スコアシートがある試合には、合流点に小さな「📋」ボタンを出す */
+      const _brTour=_tourB;
+      const _brSrc=_brTour?(_brTour.matches||[]).concat(sentMatchCards_(_brTour)):[];
+      const _brIds=[];
+      function sheetBadge(md,xM,yP){
+        if(!md||!md.team1||!md.team2)return '';
+        const mid=bracketMatchIdOf_(_brTour,_brSrc,md.team1,md.team2);
+        if(!mid)return '';
+        _brIds.push(mid);
+        if(_throwsKnown[mid]!==true)return '';
+        return `<g class="br-sheet" data-matchid="${esc(mid)}" style="cursor:pointer;"><rect x="${xM+3}" y="${yP-17}" width="22" height="15" rx="4" fill="#fff" stroke="#2563eb" stroke-width="1.2"/><text x="${xM+14}" y="${yP-9.5}" text-anchor="middle" dominant-baseline="central" font-size="10">📋</text></g>`;
       }
       function seg(x1,y1,x2,y2,red){
         return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${red?RED:BLACK}" stroke-width="${red?2.5:1}"/>`;
@@ -7861,6 +7881,7 @@ function rTournamentInfo(){
           parts.push(seg(xM,e.y1,xM,e.y,rT));
           parts.push(seg(xM,e.y,xM,e.y2,rB));
           parts.push(seg(xM,e.y,xM+COL_W,e.y,rO));   // 次ラウンドへ
+          parts.push(sheetBadge(mm,xM,e.y));
         }
       });
 
@@ -7880,6 +7901,7 @@ function rTournamentInfo(){
           parts.push(seg(xM,yT,xM,yP,rT));
           parts.push(seg(xM,yP,xM,yB,rB));
           parts.push(seg(xM,yP,xM+COL_W,yP,rO));
+          parts.push(sheetBadge(r2[m],xM,yP));
           nodes.push({y:yP});
         }
         colBase=xM;
@@ -7902,6 +7924,7 @@ function rTournamentInfo(){
           parts.push(seg(xM,yT,xM,yP,rT));
           parts.push(seg(xM,yP,xM,yB,rB));
           parts.push(seg(xM,yP,xM+COL_W,yP,rO));
+          parts.push(sheetBadge(md[m],xM,yP));
           next.push({y:yP});
         }
         nodes=next; colBase=xM;
@@ -7911,11 +7934,13 @@ function rTournamentInfo(){
       const yF=nodes[0]?nodes[0].y:PAD_TOP;
       const xC=colBase+COL_W;
       const cRaw=String(champion||'').trim();   // 【8-8】文字数は置き換える前の名前で数える
-      const cN=cRaw.length>9?esc(cRaw.slice(0,9))+'…':esc(cRaw);
+      const _cW=CROWN_W-24;   // 【2026-10-26】幅で測る
+      const cN=brTextW_(cRaw,11,true)<=_cW?esc(cRaw):esc(brFitCut_(cRaw,11,_cW-brTextW_('…',11,true),true)[0])+'…';
       parts.push(`<text x="${xC+CROWN_W/2-24}" y="${yF-16}" font-size="22">👑</text>`);
       parts.push(`<rect x="${xC}" y="${yF-12}" width="${CROWN_W-10}" height="24" rx="4" fill="#fff" stroke="${cN?RED:'#9ca3af'}" stroke-width="${cN?2.5:1.5}"/>`);
       if(cN!=='')parts.push(`<text x="${xC+7}" y="${yF}" dominant-baseline="central" font-size="11" font-weight="700" fill="#b45309">${cN}</text>`);
 
+      S._brSheetIds=_brIds;
       return `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}" style="display:block;font-family:inherit;">${parts.join('')}</svg>`;
     }
 
@@ -7942,7 +7967,8 @@ function rTournamentInfo(){
         </div>
         <div style="font-size:11px;color:#9ca3af;text-align:center;margin-top:10px;line-height:1.6;">
           勝ち上がったチームのラインが<span style="color:#dc2626;font-weight:700;">赤</span>く伸びていきます。<br>
-          チーム名は一番左の列に表示されます。下・横にスクロールできます。
+          チーム名は一番左の列に表示されます。下・横にスクロールできます。<br>
+          <span style="display:inline-block;border:1.2px solid #2563eb;border-radius:4px;padding:0 3px;">📋</span> を押すと、その試合のスコアシートを見られます。
         </div>`}
     </div>`;
   }
@@ -8156,7 +8182,7 @@ function rTournamentInfo(){
             if(!adv)return'';
             const col=ADV_COLORS_[adv.i%ADV_COLORS_.length];
             return S._tiPrelimConfirmed===true
-              ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:#FFCB3D;font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">🎉 ${escP(adv.name)}に進出！</div>`
+              ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:#FFF3C4;border:1.5px solid #FFCB3D;font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">${escP(adv.name)}に進出！</div>`
               :`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#FFF7D6;border:1.5px dashed #FFCB3D;font-size:14px;font-weight:700;color:#1a1a1a;text-align:center;">このままいくと <b>${escP(adv.name)}</b> に進出</div>`;
           })()}
         </div>
@@ -9034,9 +9060,57 @@ function sentResultHtml_(matchId,sent,card,nameA,nameB){
   </div>`;
 }
 
+/* 【2026-10-26】トーナメント表の文字の幅を測る（チーム名の切り方・2行にするかを決める） */
+let _brCtx_=null;
+function brTextW_(str,px,bold){
+  const t=String(str||'');
+  try{
+    if(!_brCtx_)_brCtx_=document.createElement('canvas').getContext('2d');
+    const ff=(document.body&&getComputedStyle(document.body).fontFamily)||'sans-serif';
+    _brCtx_.font=(bold?'700 ':'')+px+'px '+ff;
+    return _brCtx_.measureText(t).width;
+  }catch(e){
+    return [...t].reduce((w,c)=>w+(/[ -~\uFF61-\uFF9F]/.test(c)?0.55:1)*px,0);   // 測れないとき：半角は全角の約半分
+  }
+}
+/* 幅 maxW に入るところで切る。[入る部分, 残り] を返す */
+function brFitCut_(str,px,maxW,bold){
+  const ch=[...String(str||'')];
+  let i=0;
+  while(i<ch.length&&brTextW_(ch.slice(0,i+1).join(''),px,bold)<=maxW)i++;
+  return [ch.slice(0,i).join(''),ch.slice(i).join('')];
+}
+/* 【2026-10-26】トーナメント表の1試合（チーム名2つ）から、その試合の試合IDを探す。
+   チーム名 → 大会の参加チームのNo → 対戦カード（配信された対戦表＋結果が届いた試合）で、
+   その2チームが当たっている試合を探す。一次予選の試合は除く。いくつかあれば試合区分の番号が大きいほう。 */
+function bracketMatchIdOf_(tour,src,n1,n2){
+  if(!tour)return '';
+  const norm=x=>String(x||'').replace(/[\s\u3000]+/g,'');
+  const idOf=n=>{
+    const k=norm(n);if(!k)return '';
+    if(/^\d{1,3}$/.test(k))return pad3s_(k);
+    const t=(tour.teams||[]).find(t=>norm(t.name)===k);
+    return t?pad3s_(t.id):'';
+  };
+  const ia=idOf(n1),ib=idOf(n2);
+  if(!ia||!ib)return '';
+  let best='',bestCode=-1;
+  (src||[]).forEach(m=>{
+    if(!m||!m.matchId)return;
+    const pa=pad3s_(m.teamA),pb=pad3s_(m.teamB);
+    if(!((pa===ia&&pb===ib)||(pa===ib&&pb===ia)))return;
+    const code=m.matchId.split('_')[2]||'';
+    if(isFirstPrelimCode_(tour,code))return;
+    const n=parseInt(code,10)||0;
+    if(n>bestCode){bestCode=n;best=m.matchId;}
+  });
+  return best;
+}
+
 function rCourtSearch(){
   const q=S._courtSearchQuery||{teamNo:'',matchCode:''};
-  const results=S._courtSearchResults||null;
+  /* 【2026-10-26】「送信済みの試合を確認」から開いたときは、結果送信済みのカードだけを出す */
+  const results=(S._csSentOnly&&Array.isArray(S._courtSearchResults))?S._courtSearchResults.filter(r=>sentResultOf_(r.matchId)):(S._courtSearchResults||null);
   // 【8-7】大会カードの「対戦相手を検索」から開いたときは、そのカードの大会を見る
   const _csT=csTour();
   const tourSrc=_csT||{teams:[],matchRules:[]};
@@ -9048,7 +9122,7 @@ function rCourtSearch(){
     return`<div style="padding:16px;max-width:480px;margin:0 auto;">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;">
         <button id="btn-bk-court-search" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
-        <div style="font-size:17px;font-weight:700;color:#111;">🔍 対戦コートを検索</div>
+        <div style="font-size:17px;font-weight:700;color:#111;">${S._csSentOnly?'📨 送信済みの試合を確認':'🔍 対戦コートを検索'}</div>
       </div>
       <div style="text-align:center;padding:48px 0;color:#9ca3af;">最新の対戦データを読み込み中...</div>
     </div>`;
@@ -9057,7 +9131,7 @@ function rCourtSearch(){
   let resultHtml='';
   if(results!==null){
     if(results.length===0){
-      resultHtml=`<div style="text-align:center;padding:16px;color:#9ca3af;font-size:14px;">該当する対戦が見つかりませんでした</div>`;
+      resultHtml=`<div style="text-align:center;padding:16px;color:#9ca3af;font-size:14px;">${S._csSentOnly?'結果送信済みの試合はまだありません':'該当する対戦が見つかりませんでした'}</div>`;
     } else {
       /* 【2026-10-26】結果送信済みの試合は、これからの試合より下へ（それぞれの中の並び順は今までどおり） */
       const _ordered=results.filter(r=>!sentResultOf_(r.matchId)).concat(results.filter(r=>sentResultOf_(r.matchId)));
@@ -9159,7 +9233,7 @@ function rCourtSearch(){
       :`<button class="btn btn-gray btn-sm" id="btn-cs-toggle" style="width:100%;margin-bottom:12px;font-size:13px;padding:9px;">🔍 他の${csW}・試合区分を検索</button>`)
     :searchForm;
 
-  const headerTitle=_csLive?(personalized?'対戦コートを見る':'対戦コートを検索'):'対戦相手を検索';
+  const headerTitle=S._csSentOnly?'📨 送信済みの試合を確認':(_csLive?(personalized?'対戦コートを見る':'対戦コートを検索'):'対戦相手を検索');
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-court-search">← 戻る</button>
@@ -11166,8 +11240,9 @@ function bind(){
   /* 【8-7】対戦コート／対戦相手の検索を開く。
        evcode を渡すと、その大会を検索する（大会カードの「対戦相手を検索」）。
        渡さなければ、これまでどおり開催中の大会（「試合」の「対戦コートを検索」）。 */
-  async function openCourtSearch(evcode){
+  async function openCourtSearch(evcode,opts){
     // 【体感速度改善】先に画面遷移してローディング表示し、通信は裏で実行する
+    S._csSentOnly=!!(opts&&opts.sentOnly);   // 【2026-10-26】「送信済みの試合を確認」から開いたとき
     S._courtSearchExpanded=false;
     S._csEventCode=String(evcode||'');
     S._courtSearchQuery={teamNo:'',matchCode:''};S._courtSearchResults=null;
@@ -11202,7 +11277,7 @@ function bind(){
   /* 【8-8】「対戦コートを検索」は「送信済みの試合を確認」に変わった。中身はまだ準備中。
        対戦コートは、大会カードの「対戦相手・コートを検索」から探せる。 */
   const bgcs=document.getElementById('btn-go-court-search');
-  if(bgcs)bgcs.onclick=()=>alert('「送信済みの試合を確認」は準備中です。\n\n対戦コートは、大会カードの「🔍 対戦相手・コートを検索」から探せます。');
+  if(bgcs)bgcs.onclick=()=>openCourtSearch(bgcs.dataset.evcode||'',{sentOnly:true});   // 【2026-10-26】中身を作った
   // ホーム：パーソナライズ解除
   const bcmt=document.getElementById('btn-clear-myteam');
   if(bcmt)bcmt.onclick=()=>{clearMyTeam();render();};
@@ -11853,6 +11928,22 @@ function bind(){
   const bprkb=document.getElementById('btn-prelim-rank-back');
   if(bprkb)bprkb.onclick=()=>{S._tiPrelimRankOpen=false;render();try{window.scrollTo(0,0);}catch(e){}};
   // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
+  /* 【2026-10-26】トーナメント表：結果が届いた試合を読み、スコアシートがあるかを確かめる（あれば 📋 が出る） */
+  if(S.phase==='tournamentInfo'&&S._tiView==='bracket'&&!S._tiLoading){
+    const _bt=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):tiTour();
+    const _bk=_bt?sbEventKeyOf_(_bt):'';
+    if(_bk&&S._brSentTried!==_bk){
+      S._brSentTried=_bk;
+      loadSentResults_(_bt).then(()=>{if(S.phase==='tournamentInfo'&&S._tiView==='bracket')render();}).catch(()=>{});
+    }else if(Array.isArray(S._brSheetIds)&&!S._brThrowsBusy){
+      const _need=S._brSheetIds.filter(id=>_throwsKnown[id]===undefined);
+      if(_need.length){
+        S._brThrowsBusy=true;
+        loadThrowsKnown_(_need).then(ok=>{S._brThrowsBusy=false;if(ok&&S.phase==='tournamentInfo'&&S._tiView==='bracket')render();});
+      }
+    }
+  }
+  document.querySelectorAll('.br-sheet').forEach(g=>g.addEventListener('click',()=>openScoreSheetFor_(g.getAttribute('data-matchid'),'tournamentInfo','')));
   if(S.phase==='tournamentInfo'&&S._tiView==='prelim'&&S._tiPrelimSelected){
     const _t=tiTour(),_sel=S._tiPrelimSelected;
     const _n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);
