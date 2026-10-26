@@ -7644,8 +7644,8 @@ function rTournamentInfo(){
       ${!hasAny
         ? `<div style="text-align:center;padding:32px;color:#9ca3af;font-size:14px;">大会の詳細はまだ登録されていません。</div>`
         : `<div>
-            ${block('📜','大会規約',rulesText)}
             ${block('⚠️','大会における注意点',notesText)}
+            ${block('📜','大会規約',rulesText)}
           </div>`}
     </div>`;
   }
@@ -8027,7 +8027,7 @@ function rTournamentInfo(){
          ボタンで開け閉めする。 */
     const rankOpen=!!S._tiPrelimRankOpen;
     const prelimRankBtn=(!loading&&!err&&teams.length)
-      ?`<button id="btn-prelim-rank" style="width:100%;padding:12px;margin-bottom:10px;font-size:14px;font-weight:800;background:${rankOpen?'#fff':'#FFCB3D'};color:#2b2100;border:1.5px solid #FFCB3D;border-radius:12px;cursor:pointer;">${rankOpen?'▲ ランキングを閉じる':'🏆 予選のランキングを確認'}</button>`:'';
+      ?`<button id="btn-prelim-rank" style="width:100%;padding:12px;margin-bottom:16px;font-size:14px;font-weight:800;background:#FFCB3D;color:#2b2100;border:1.5px solid #FFCB3D;border-radius:12px;cursor:pointer;">🏆 予選のランキングを確認</button>`:'';
     const prelimRankTable=(rankOpen&&teams.length)?(()=>{
       /* 【8-8】予選のランキング。罫線付きの表で、
            順位（暫定）・No・名前・総セット・勝利・引き分け・合計点 の順。
@@ -8040,18 +8040,19 @@ function rTournamentInfo(){
       const bd='border:1px solid #1f2937;';
       const th=bd+'padding:6px 3px;font-size:11px;color:#111;font-weight:700;background:#d1d5db;white-space:nowrap;text-align:center;';
       const td=bd+'padding:7px 4px;font-size:12.5px;background:#fff;';
-      let prevG=-2,html='';
+      /* 【2026-10-26】進出先の区切りは、境目（例：64位のすぐ下）に2行で出す。
+           ⬆︎ 上のトーナメントの進出圏 ／ ⬇︎ 下のトーナメントの進出圏。順位の欄はふつうの色。 */
+      const advLine=(ar,a)=>`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:800;color:#1a1a1a;background:#FFF7D6;">${ar}${escR(a.label)}${conf?'進出':'進出圏'}（${a.rule.from}~${a.rule.to}位）</td></tr>`;
+      let prevG=-2,prevAdv=null,html='';
       list.forEach(t=>{
         const adv=advanceOfRank_(_rt,t.rank);
         const g=adv?adv.i:-1;
-        if(g!==prevG&&adv){
-          const r=adv.rule;
-          html+=`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:800;color:#1a1a1a;background:${ADV_COLORS_[g%ADV_COLORS_.length]}88;">${g===0?'⬆︎':'⬇︎'} ${escR(adv.label)}${conf?'進出':'進出圏'}（${r.from}〜${r.to}位）</td></tr>`;
-        }else if(g!==prevG&&!adv&&prevG!==-2){
-          html+=`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:700;color:#6b7280;background:#f3f4f6;">進出先の設定なし</td></tr>`;
+        if(prevG!==-2&&g!==prevG){
+          if(prevAdv)html+=advLine('⬆︎',prevAdv);
+          html+=adv?advLine('⬇︎',adv):`<tr><td colspan="7" style="${bd}padding:6px 8px;font-size:12px;font-weight:700;color:#6b7280;background:#f3f4f6;">⬇︎進出先の設定なし</td></tr>`;
         }
-        prevG=g;
-        const rc=adv?ADV_COLORS_[g%ADV_COLORS_.length]:'#fff';
+        prevG=g;prevAdv=adv;
+        const rc='#f3f4f6';
         const me=sel&&sameNo_(sel.teamNo,t.teamNo);
         html+=`<tr${me?' style="outline:2.5px solid #f59e0b;outline-offset:-2px;"':''}>
           <td style="${td}text-align:center;font-weight:800;background:${rc};">${escR(t.rank||'-')}</td>
@@ -8064,7 +8065,6 @@ function rTournamentInfo(){
         </tr>`;
       });
       return`<div style="margin-bottom:12px;overflow-x:auto;">
-        ${conf?'':'<div style="font-size:12px;font-weight:800;color:#dc2626;margin-bottom:4px;">※こちらは暫定の順位です</div>'}
         <table style="width:100%;border-collapse:collapse;">
           <thead><tr>
             <th style="${th}">${conf?'順位':'順位<br>（暫定）'}</th><th style="${th}">${pW}<br>No</th><th style="${th}text-align:left;">${pW}名</th>
@@ -8079,9 +8079,20 @@ function rTournamentInfo(){
     const prelimNotice=(!loading&&!err&&teams.length)
       ?(S._tiPrelimConfirmed===true
         ?`<div style="background:#E1F5EE;border:1.5px solid #9FE1CB;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#085041;font-weight:700;line-height:1.6;">✅ 予選結果が確定しました。<br><span style="font-weight:600;">これ以降の修正は受け付けられません。</span></div>`
-        :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">⚠️ 予選結果は暫定のものです。<br><span style="font-weight:600;">確定前のため、このあと変わることがあります。</span>${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合<br><span style="font-weight:500;color:#a16207;">順位は 勝利セット数 → 引き分けセット数 → 合計点 の順。すべて同じなら同順位。</span></div>`:''}</div>`)
+        :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">⚠️ 予選結果は暫定のものです。${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合</div>`:''}</div>`)
       :'';
 
+    /* 【2026-10-26】予選のランキングは、折り返しではなく新しい画面で出す */
+    if(rankOpen&&!loading&&!err&&teams.length){
+      return`<div style="padding:16px;max-width:480px;margin:0 auto;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:18px;">
+          <button id="btn-prelim-rank-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
+          <div style="font-size:17px;font-weight:700;color:#111;">🏆 予選のランキング</div>
+        </div>
+        ${prelimNotice}
+        ${prelimRankTable}
+      </div>`;
+    }
     let body='';
     if(loading){body=`<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div>`;}
     else if(err){body=`<div style="padding:16px;background:#fee2e2;border-radius:10px;color:#dc2626;font-size:13px;">${err}</div>`;}
@@ -8131,23 +8142,25 @@ function rTournamentInfo(){
       body=`
         <div style="background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:16px;margin-bottom:16px;">
           <div style="font-size:16px;font-weight:700;color:#111;margin-bottom:2px;">No.${sel.teamNo}　${sel.teamName||''}</div>
+          <!-- 【2026-10-26】色をそろえた（淡い黄色・数字は黒） -->
           <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;">
-            <div style="text-align:center;background:#f3f4f6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">総セット</div><div style="font-size:20px;font-weight:700;color:#374151;">${sel.sets!=null?sel.sets:'-'}</div></div>
-            <div style="text-align:center;background:#E1F5EE;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">勝利セット</div><div style="font-size:20px;font-weight:700;color:#0a6e57;">${sel.wins||'0'}</div></div>
-            <div style="text-align:center;background:#f0fdf4;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">引分セット</div><div style="font-size:20px;font-weight:700;color:#16a34a;">${sel.draws||'0'}</div></div>
-            <div style="text-align:center;background:#fee2e2;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">敗北セット</div><div style="font-size:20px;font-weight:700;color:#b91c1c;">${sel.losses!=null?sel.losses:'-'}</div></div>
-            <div style="text-align:center;background:#fef3c7;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">合計点</div><div style="font-size:20px;font-weight:700;color:#d97706;">${sel.total||'0'}</div></div>
-            <div style="text-align:center;background:#faf5ff;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">${S._tiPrelimConfirmed===true?'順位':'暫定順位'}</div><div style="font-size:20px;font-weight:700;color:#9333ea;">${sel.rank||'-'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">総セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.sets!=null?sel.sets:'-'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">勝利セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.wins||'0'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">引分セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.draws||'0'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">敗北セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.losses!=null?sel.losses:'-'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">合計点</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.total||'0'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">${S._tiPrelimConfirmed===true?'順位':'暫定順位'}</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.rank||'-'}</div></div>
           </div>
           ${(()=>{ /* 【8-8】予選順位による進出先 */
             const adv=advanceOfRank_(tiTour(),sel.rank);
             if(!adv)return'';
             const col=ADV_COLORS_[adv.i%ADV_COLORS_.length];
             return S._tiPrelimConfirmed===true
-              ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:${col};font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">🎉 ${escP(adv.name)}に進出！</div>`
-              :`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:${col}55;border:1.5px dashed ${col};font-size:14px;font-weight:700;color:#1a1a1a;text-align:center;">このままいくと <b>${escP(adv.name)}</b> に進出</div>`;
+              ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:#FFCB3D;font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">🎉 ${escP(adv.name)}に進出！</div>`
+              :`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#FFF7D6;border:1.5px dashed #FFCB3D;font-size:14px;font-weight:700;color:#1a1a1a;text-align:center;">このままいくと <b>${escP(adv.name)}</b> に進出</div>`;
           })()}
         </div>
+        ${prelimRankBtn}
         <div style="font-size:14px;font-weight:700;color:#111;margin-bottom:10px;">各予選の結果</div>
         ${(()=>{const NUM=['①','②','③','④','⑤','⑥','⑦','⑧','⑨'];const n=Math.min(Math.max(Number(S._tiPrelimMatches)||3,1),9);let h='';for(let m=1;m<=n;m++){h+=setRow('予選'+NUM[m-1],sel['opp'+m]||'',sel['p'+m+'a']||'',sel['p'+m+'b']||'',m);}return h;})()}
       `;
@@ -8164,10 +8177,9 @@ function rTournamentInfo(){
         <button id="btn-ti-sub-back" style="padding:6px 12px;border-radius:8px;border:1.5px solid #e5e7eb;background:#f9fafb;cursor:pointer;font-size:14px;color:#374151;">← 戻る</button>
         <div style="font-size:17px;font-weight:700;color:#111;">🏅 予選結果</div>
       </div>
-      ${prelimRankBtn}
-      ${prelimRankTable}
       ${prelimNotice}
       ${searchBox}
+      ${sel?'':prelimRankBtn}
       ${body}
     </div>`;
   }
@@ -9008,7 +9020,7 @@ function sentResultHtml_(matchId,sent,card,nameA,nameB){
       <span style="flex:1;text-align:center;font-weight:800;color:${C[1]};">${pb[i]==null?'-':esc(pb[i])}</span>
     </div>`;
   }
-  const res=r=>r?esc(r.result||''):'';
+  const res=r=>{const v=r?String(r.result||'').trim():'';return(v&&v!=='対象外')?esc(v):'';};   // 【2026-10-26】表裏など「対象外」は出さない
   const th=_throwsKnown[matchId];
   return`<div style="margin-top:10px;background:#fff;border:1px solid #e5e7eb;border-radius:10px;padding:10px 12px;">
     <div style="font-size:10.5px;color:#9ca3af;margin-bottom:4px;">${src}</div>
@@ -9047,7 +9059,9 @@ function rCourtSearch(){
     if(results.length===0){
       resultHtml=`<div style="text-align:center;padding:16px;color:#9ca3af;font-size:14px;">該当する対戦が見つかりませんでした</div>`;
     } else {
-      resultHtml=results.map(r=>{
+      /* 【2026-10-26】結果送信済みの試合は、これからの試合より下へ（それぞれの中の並び順は今までどおり） */
+      const _ordered=results.filter(r=>!sentResultOf_(r.matchId)).concat(results.filter(r=>sentResultOf_(r.matchId)));
+      resultHtml=_ordered.map(r=>{
         const teamAInfo=(tourSrc.teams||[]).find(t=>t.id===r.teamA);
         const teamBInfo=(tourSrc.teams||[]).find(t=>t.id===r.teamB);
         const teamAName=teamAInfo?teamAInfo.name:('No.'+r.teamA);
@@ -9089,7 +9103,7 @@ function rCourtSearch(){
               ${_sentOpen?sentResultHtml_(r.matchId,_sent,r,teamAName,teamBName):''}`
             :(_csLive?`<button class="btn btn-green cs-start-btn" data-matchid="${r.matchId}" style="width:100%;padding:12px;font-size:15px;font-weight:700;">この試合を開始する →</button>`
             :`<div style="text-align:center;padding:9px;background:#f3f4f6;border-radius:8px;font-size:12px;color:#6b7280;">この大会はまだ始まっていません</div>`)}
-          ${renderCourtMapBlock(tourSrc.courtLayout,courtNo,r.matchId)}
+          ${_sent?'':renderCourtMapBlock(tourSrc.courtLayout,courtNo,r.matchId)}
         </div>`;
       }).join('');
     }
@@ -11824,7 +11838,7 @@ function bind(){
   // 予選結果
   const btipr=document.getElementById('btn-ti-prelim');
   if(btipr)btipr.onclick=async()=>{
-    S._tiView='prelim';S._tiLoading=true;S._tiError=null;S._tiPrelim=[];S._tiPrelimQuery='';S._tiPrelimSelected=null;render();
+    S._tiView='prelim';S._tiLoading=true;S._tiError=null;S._tiPrelim=[];S._tiPrelimQuery='';S._tiPrelimSelected=null;S._tiPrelimRankOpen=false;render();
     try{
       await loadPrelimView_();   // 【8-8】
     }catch(e){S._tiError='取得に失敗しました: '+e.message;}
@@ -11835,7 +11849,9 @@ function bind(){
   if(btisys)btisys.onclick=()=>{S._tiView='system';S._tiLoading=false;S._tiError=null;render();};
   // 【8-8】予選のランキングを開く／閉じる
   const bprk=document.getElementById('btn-prelim-rank');
-  if(bprk)bprk.onclick=()=>{S._tiPrelimRankOpen=!S._tiPrelimRankOpen;render();};
+  if(bprk)bprk.onclick=()=>{S._tiPrelimRankOpen=true;render();try{window.scrollTo(0,0);}catch(e){}};
+  const bprkb=document.getElementById('btn-prelim-rank-back');
+  if(bprkb)bprkb.onclick=()=>{S._tiPrelimRankOpen=false;render();try{window.scrollTo(0,0);}catch(e){}};
   // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
   if(S.phase==='tournamentInfo'&&S._tiView==='prelim'&&S._tiPrelimSelected){
     const _t=tiTour(),_sel=S._tiPrelimSelected;
