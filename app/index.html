@@ -3344,6 +3344,21 @@ function inAppCleanUrl_(){
   try{const u=new URL(location.href);u.searchParams.delete('openExternalBrowser');return u.toString();}catch(e){return location.href;}
 }
 
+/* 【2026-10-26】大会を選ぶ画面のカードの色のために、その端末にまだ無い大会の設定を読む（1大会につき1回だけ） */
+const _pickSyncTried_={};
+function maybeSyncPickTours_(){
+  (S._liveEvents||[]).forEach(r=>{
+    const k=String(r.event_key||'');
+    if(!k||_pickSyncTried_[k])return;
+    const t=(AD.tournaments||[]).find(x=>String(x.venueCode||'')===String(r.venue_code||'')&&String(x.eventCode||'')===String(r.event_code||''))
+          ||(AD.tournaments||[]).find(x=>String(x.eventCode||'')===String(r.event_code||''));
+    const rv=t?resolveVenue(t):null;
+    if(rv&&rv.themeColor)return;
+    _pickSyncTried_[k]=1;
+    syncSettingsFromGitHub(String(r.event_code||'')).then(()=>{if(S.phase==='setup')render();}).catch(()=>{});
+  });
+}
+
 function rSetup(){
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
@@ -3485,8 +3500,12 @@ function rSetup(){
           ||(AD.tournaments||[]).find(x=>String(x.eventCode||'')===String(r.event_code||''));
     const v=(AD.venues||[]).find(x=>String(x.code)===String(r.venue_code||''));
     const nm=escH(r.label||(t&&(t.displayName||t.eventName))||('大会 '+(r.event_code||''))).replace(/\\n/g,' ').replace(/\n/g,' ');
-    const vn=escH((v&&v.name)||'');
-    const col=(v&&v.themeColor)||'#FFC93D';
+    /* 【2026-10-26】色・会場名は、選んだあとのカードと同じ決め方（resolveVenue：配信で届いた会場＋この端末の場所の管理）。
+         これまではこの端末の「場所の管理」だけを見ていたので、参加者の端末ではいつも黄色になっていた。
+         まだ大会の設定が届いていない端末では、裏で読み込んでから描き直す（maybeSyncPickTours_）。 */
+    const rv=t?resolveVenue(t):null;
+    const vn=escH((rv&&rv.name)||(v&&v.name)||'');
+    const col=(rv&&rv.themeColor)||(v&&v.themeColor)||'#FFC93D';
     return`<button class="live-pick" data-key="${escH(r.event_key)}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:${col}2E;border:1.5px solid ${col};border-radius:14px;cursor:pointer;">
       <div style="font-size:17px;font-weight:800;color:#1a1a1a;line-height:1.35;">${nm}</div>
       ${vn?`<div style="font-size:13px;color:#6b7280;margin-top:6px;">📍 ${vn}</div>`:''}
@@ -12455,7 +12474,8 @@ function bind(){
   // 【8-8】選んだチームの予選の試合に、スコアシートがあるかを確かめる（あれば「スコアシートを確認」が出る）
   /* 【2026-10-26】現在地：ホーム（受付済み）と試合システムの画面で、結果・対戦表・タイムスケジュールを読む */
   if(S.phase==='setup'||(S.phase==='tournamentInfo'&&S._tiView==='system'))maybeRefreshPos_();
-  if(S.phase==='setup'){const _lt=posLiveTour_();if(_lt)maybeLoadLiveSched_(_lt);}   // 【2026-10-26】開催中カードのタイムスケジュール
+  if(S.phase==='setup'){const _lt=posLiveTour_();if(_lt)maybeLoadLiveSched_(_lt);}
+  if(S.phase==='setup'&&(S._liveEvents||[]).length>=2&&!getSelectedLiveKey())maybeSyncPickTours_();   // 【2026-10-26】選ぶ画面の色   // 【2026-10-26】開催中カードのタイムスケジュール
   const _pts=document.getElementById('pos-team-select');
   if(_pts)_pts.onchange=()=>{S._posTeamNo=_pts.value;render();};
   /* 【2026-10-26】トーナメント表：結果が届いた試合を読み、スコアシートがあるかを確かめる（あれば 📋 が出る） */
