@@ -1446,33 +1446,52 @@ function resetReception(){
 // ===== 受付済みチームのパーソナライズ保持（localStorage） =====
 const MYTEAM_KEY='molkky_my_team';
 const MYTEAM_TTL=3*24*60*60*1000; // 3日で失効
-function saveMyTeam(eventCode,teamId){
-  try{
-    localStorage.setItem(MYTEAM_KEY,JSON.stringify({eventCode:String(eventCode||''),teamId:String(teamId),at:Date.now()}));
-  }catch(e){}
-}
-function loadMyTeam(){
+/* 【2026-10-26】受付は「大会ごと」に覚える。
+   これまでは1大会ぶんしか覚えておらず、別の大会（開催中が2つあるときの切り替えなど）を
+   開いた瞬間に「この大会の受付ではない」として消していた。
+   いまは {大会コード: {teamId, at}} の形で、大会ごとに持つ。別の大会を開いても消さない。
+   以前の形（{eventCode, teamId, at} の1件だけ）は、読むときにそのまま引き継ぐ。 */
+function loadMyTeams_(){
   try{
     const raw=localStorage.getItem(MYTEAM_KEY);
-    if(!raw)return null;
-    return JSON.parse(raw);
-  }catch(e){return null;}
+    if(!raw)return {};
+    const d=JSON.parse(raw);
+    if(d&&d.teamId!=null&&d.eventCode!=null)return {[String(d.eventCode)]:{teamId:String(d.teamId),at:d.at}};   // 以前の形
+    return (d&&typeof d==='object'&&d.byEvent)?d.byEvent:{};
+  }catch(e){return {};}
 }
-function clearMyTeam(){
-  try{localStorage.removeItem(MYTEAM_KEY);}catch(e){}
+function saveMyTeams_(map){
+  try{
+    if(!map||!Object.keys(map).length){localStorage.removeItem(MYTEAM_KEY);return;}
+    localStorage.setItem(MYTEAM_KEY,JSON.stringify({byEvent:map}));
+  }catch(e){}
 }
-// アクティブ大会と照合し、有効な保持データのみ返す（無効なら破棄してnull）
+function saveMyTeam(eventCode,teamId){
+  const map=loadMyTeams_();
+  map[String(eventCode||'')]={teamId:String(teamId),at:Date.now()};
+  saveMyTeams_(map);
+}
+// いちばん新しく受付した1件（以前の呼び方のため残す）
+function loadMyTeam(){
+  const map=loadMyTeams_();let best=null;
+  Object.keys(map).forEach(k=>{const v=map[k];if(v&&(!best||(v.at||0)>(best.at||0)))best={eventCode:k,teamId:v.teamId,at:v.at};});
+  return best;
+}
+// eventCode を渡すと、その大会の受付だけを解除。渡さなければ全部
+function clearMyTeam(eventCode){
+  if(eventCode==null||eventCode===''){saveMyTeams_({});return;}
+  const map=loadMyTeams_();delete map[String(eventCode)];saveMyTeams_(map);
+}
+// その大会の受付を返す（無ければ null）。古すぎる（3日経過）ものだけ消す
 // eventCode を渡さない場合は activeTour() の大会コードで照合
 function getValidMyTeam(activeEventCode){
-  const m=loadMyTeam();
-  if(!m||!m.teamId){return null;}
-  // 保存が古すぎる（3日経過）→ 破棄
-  if(!m.at||(Date.now()-m.at)>MYTEAM_TTL){clearMyTeam();return null;}
-  // アクティブ大会コードと照合
   const cur=activeEventCode!=null?String(activeEventCode||''):String((activeTour()||{}).eventCode||'');
-  if(!cur){return null;} // 配信中の大会が分からない場合は保持を使わない（破棄はしない）
-  if(String(m.eventCode||'')!==cur){clearMyTeam();return null;}
-  return m;
+  if(!cur)return null; // 配信中の大会が分からない場合は保持を使わない（破棄はしない）
+  const map=loadMyTeams_();
+  const v=map[cur];
+  if(!v||!v.teamId)return null;
+  if(!v.at||(Date.now()-v.at)>MYTEAM_TTL){clearMyTeam(cur);return null;}
+  return {eventCode:cur,teamId:String(v.teamId),at:v.at};
 }
 // チームNo・試合区分から対戦カードを検索（ソート済み配列を返す）
 // ===== 試合ラベル解決：試合区分名＋（トーナメント名＋ラウンド名）を組み立てる =====
@@ -11725,7 +11744,8 @@ function bind(){
   if(bgcs)bgcs.onclick=()=>openCourtSearch(bgcs.dataset.evcode||'',{sentOnly:true});   // 【2026-10-26】中身を作った
   // ホーム：パーソナライズ解除
   const bcmt=document.getElementById('btn-clear-myteam');
-  if(bcmt)bcmt.onclick=()=>{clearMyTeam();render();};
+  // 【2026-10-26】いま表示している大会の受付だけを解除（ほかの大会の受付は残す）
+  if(bcmt)bcmt.onclick=()=>{const _lt=posLiveTour_()||activeTour();clearMyTeam(_lt?_lt.eventCode:null);render();};
   // 【1-2】開催中が2つ以上のとき：見る大会を選ぶ
   document.querySelectorAll('.live-pick').forEach(b=>{
     b.onclick=()=>{
