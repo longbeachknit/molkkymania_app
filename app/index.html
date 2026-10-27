@@ -3548,7 +3548,7 @@ function pastStandHtml_(teams){
   const list=S._pastStandAll?ranks:ranks.slice(0,SHOW);
   const col=r=>{const n=parseInt(r,10);return n===1?'#d4a000':n===2?'#94a3b8':n===3?'#b45309':'#1a1a1a';};
   return `<div style="margin-top:8px;">${list.map(r=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f1f2f4;">
-      <span style="min-width:40px;font-size:15px;font-weight:800;color:${col(r.rank)};">${escSc_(r.rank)}位</span>
+      <span style="min-width:64px;white-space:nowrap;font-size:15px;font-weight:800;color:${col(r.rank)};">${escSc_(/^\d+$/.test(String(r.rank))?r.rank+'位':r.rank)}</span>
       <span style="font-size:12px;color:#6b7280;min-width:52px;">No.${escSc_(r.teamNo)}</span>
       <span style="font-size:13.5px;font-weight:700;color:#1a1a1a;">${escSc_(nameOf(r.teamNo))}</span>
     </div>`).join('')}</div>
