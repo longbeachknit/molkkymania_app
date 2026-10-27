@@ -3537,15 +3537,19 @@ function rPastList(){
   </div>`;
 }
 /* 【2026-10-27】最終順位：スプシの「最終順位を送信」で届いたもの（event_docs の standings）。
-   ranks＝トーナメント①、ranks2＝トーナメント②（Bトーナメントなど。無い大会は空）。
-   ②があるときは、大会設定の表示名（bracket1Name／bracket2Name）の見出しで2つに分けて出す。
+   ranks＝トーナメント①、ranks2＝②（Bトーナメントなど）、ranks3＝③（シングルスで使う）。無い大会は空。
+   ②③があるときは、見出しで分けて出す（①②は大会設定の表示名 bracket1Name／bracket2Name、③は「Lトーナメント」。トーナメント表は無い）。
    それぞれ上から10位まで。それより下は「すべて見る」で開く。届いていなければ「準備中」 */
 function pastStandHtml_(teams,tour){
   const st=S._pastStand;
   if(st===undefined)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">読み込み中…</div>`;
-  const r1=(st&&Array.isArray(st.ranks))?st.ranks:[];
-  const r2=(st&&Array.isArray(st.ranks2))?st.ranks2:[];
-  if(!r1.length&&!r2.length)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>`;
+  const arr=v=>Array.isArray(v)?v:[];
+  const groups=[
+    {n:1,ranks:arr(st&&st.ranks), name:(tour&&tour.bracket1Name)||'決勝トーナメント'},
+    {n:2,ranks:arr(st&&st.ranks2),name:(tour&&tour.bracket2Name)||'Bトーナメント'},
+    {n:3,ranks:arr(st&&st.ranks3),name:(tour&&tour.bracket3Name)||'Lトーナメント'}
+  ].filter(g=>g.ranks.length);
+  if(!groups.length)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>`;
   const nameOf=no=>{const t=(teams||[]).find(x=>parseInt(x.id,10)===parseInt(no,10));return t?t.name:'';};
   const SHOW=10;
   const all=S._pastStandAll||{};
@@ -3559,10 +3563,9 @@ function pastStandHtml_(teams,tour){
     </div>`).join('')}</div>
     ${ranks.length>SHOW?`<button class="past-stand-all" data-n="${n}" style="width:100%;margin-top:8px;padding:8px;background:none;border:none;font-size:12.5px;color:#6b7280;cursor:pointer;">${all[n]?'▲ 閉じる':'▼ すべて見る（'+ranks.length+'チーム）'}</button>`:''}`;
   };
-  if(!r2.length)return listHtml(r1,1);
+  if(groups.length===1&&groups[0].n===1)return listHtml(groups[0].ranks,1);   // ①だけの大会は見出しなし（今までどおり）
   const head=t=>`<div style="font-size:13px;font-weight:800;color:#8a6d00;background:#FFF7D6;border-radius:6px;padding:5px 8px;margin-top:10px;">${escSc_(t)}</div>`;
-  return (r1.length?head((tour&&tour.bracket1Name)||'決勝トーナメント')+listHtml(r1,1):'')
-        +head((tour&&tour.bracket2Name)||'Bトーナメント')+listHtml(r2,2);
+  return groups.map(g=>head(g.name)+listHtml(g.ranks,g.n)).join('');
 }
 function rPastEvent(){
   const k=S._pastKey||'';
