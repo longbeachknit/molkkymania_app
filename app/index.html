@@ -2692,6 +2692,7 @@ function render(){
   else if(p==='viewTeamDetail')app.innerHTML=rViewTeamDetail();
   else if(p==='viewPersonList')app.innerHTML=rViewPersonList();
   else if(p==='viewPersonDetail')app.innerHTML=rViewPersonDetail();
+  else if(p==='viewPersonEvents')app.innerHTML=rViewPersonEvents();   // 【2026-10-27】大会別の成績
   else if(p==='beginner')app.innerHTML=rBeginner();
   bind();
   saveMatchState();
@@ -3715,8 +3716,8 @@ function rPStat(){
     <div id="ps-results">${psResultsHtml_()}</div>
   </div>`;
 }
-async function openPsPerson_(name,ev,tn){
-  _viewState.detailBack='pstat';
+async function openPsPerson_(name,ev,tn,back){
+  _viewState.detailBack=back||'pstat';
   _viewState.loading=true;_viewState.selectedPerson=null;_viewState.persons=[];_viewState.cumulData=null;
   S.phase='viewPersonDetail';render();try{window.scrollTo(0,0);}catch(e){}
   if(ev){
@@ -3730,6 +3731,50 @@ async function openPsPerson_(name,ev,tn){
     _viewState.cumulData=c;_viewState.personMode='cumul';
   }
   _viewState.loading=false;renderIfPhase('viewPersonDetail');
+}
+/* 【2026-10-27】大会別の成績：通算の成績から開く。出た大会（新しい順）と、チーム名・チームメイト。押すとその大会の成績 */
+async function openPersonEvents_(){
+  const vs=_viewState;
+  const name=vs.selectedPerson&&vs.selectedPerson.name;
+  if(!name)return;
+  vs.pev={name,rows:null,base:{person:vs.selectedPerson,cumul:vs.cumulData,back:vs.detailBack}};
+  vs.detailBack=null;
+  S.phase='viewPersonEvents';render();try{window.scrollTo(0,0);}catch(e){}
+  try{
+    await loadEventMeta_();
+    const mine=(await sbGet_('v_person_event?member=eq.'+enc_(name)+'&select=event_code,team_no,team_name')).filter(r=>!isTestEvent_(r.event_code));
+    let mates=[];
+    if(mine.length){
+      const cond=mine.map(r=>'and(event_code.eq.'+r.event_code+',team_no.eq.'+r.team_no+')').join(',');
+      mates=await sbGet_('v_person_event?select=member,event_code,team_no&or=('+encodeURIComponent(cond)+')');
+    }
+    vs.pev.rows=mine.map(r=>({ev:r.event_code,tn:r.team_no,team:r.team_name,
+      mates:mates.filter(m=>m.event_code===r.event_code&&m.team_no===r.team_no&&m.member!==name).map(m=>m.member)}))
+      .sort((a,b)=>(evStartMs_(b.ev)-evStartMs_(a.ev))||String(b.ev).localeCompare(String(a.ev)));
+  }catch(e){console.error('大会別の成績の読み込みに失敗',e);vs.pev.rows=[];vs.pev.err=true;}
+  renderIfPhase('viewPersonEvents');
+}
+function rViewPersonEvents(){
+  const pv=_viewState.pev||{};
+  const rows=pv.rows;
+  const body=!rows?`<div style="text-align:center;padding:40px;color:#6b7280;">読み込み中...</div>`
+    :!rows.length?`<div style="text-align:center;padding:32px;color:#9ca3af;">${pv.err?'読み込めませんでした':'出場した大会が見つかりません'}</div>`
+    :`<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">出場 ${rows.length} 大会（押すとその大会の成績）</div>`+rows.map((r,i)=>`<div class="vp-ev" data-i="${i}" style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div style="min-width:0;">
+          <div style="font-size:11.5px;color:#6b7280;">${escSc_(evDateJa_(r.ev,true))}</div>
+          <div style="font-size:14px;font-weight:800;color:#1a1a1a;line-height:1.4;">${escSc_(evNameOf_(r.ev))}</div>
+          <div style="font-size:12.5px;color:#374151;margin-top:3px;">${escSc_(r.team)}</div>
+          ${r.mates.length?`<div style="font-size:12px;color:#6b7280;margin-top:1px;">チームメイト：${r.mates.map(escSc_).join(' / ')}</div>`:''}
+        </div>
+        <div style="color:#9ca3af;font-size:18px;">›</div>
+      </div>`).join('');
+  return `<div style="padding:8px 0 4px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <button class="btn btn-gray btn-sm" id="btn-bk-vp-events">← 戻る</button>
+      <div style="font-size:16px;font-weight:700;">${escSc_(pv.name||'')}　大会別の成績</div>
+    </div>
+    ${body}
+  </div>`;
 }
 function bindPsResults_(){
   document.querySelectorAll('.ps-team').forEach(el=>el.onclick=()=>{
@@ -4933,6 +4978,36 @@ function showRuleModal(prefix,idx){
 
 
 
+/* 【2026-10-27】「成績の見方」ボタンと説明の窓。投擲の成績が出る画面（大会・チーム・個人・ランキング）の右上に出す */
+function statsHelpBtn_(){return `<button class="btn btn-gray btn-sm" id="btn-stats-help" style="margin-left:auto;font-size:12px;white-space:nowrap;">成績の見方</button>`;}
+function statsHelpHtml_(){return `
+    <!-- 成績の見方モーダル -->
+    <div id="stats-help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;overflow-y:auto;padding:16px;">
+      <div style="background:#fff;border-radius:12px;max-width:540px;margin:0 auto;padding:20px;font-size:13px;line-height:1.7;color:#374151;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:700;">📖 成績詳細ページ</div>
+          <button id="btn-stats-help-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
+        </div>
+        <p style="margin:0 0 10px;">大会全体の成績、チーム別の成績、個人別の成績を見ることができます。</p>
+
+        <div style="font-weight:700;margin:14px 0 6px;">1. 大会基本情報</div>
+        <p style="margin:0 0 10px;">参加者数と総投擲回数を示しており、その下に勝率を表示しています。先行セットと後行セットの勝率を足しても100%にならない場合がありますが、これは予選に引き分けのセットが含まれているためです。その分が加味されているものとしてご確認ください。</p>
+
+        <div style="font-weight:700;margin:14px 0 6px;">2. スタッツ項目</div>
+        <div style="margin-bottom:6px;"><span style="font-weight:600;">(a) QH率（クオリティヒット率）</span><br>狙い通りの基準（詳細は別紙参照）に当てはまった投擲の割合を計算しています。</div>
+        <div style="margin-bottom:6px;"><span style="font-weight:600;">(b) フォルト率</span><br>総投擲回数に対して、0点だった投擲が何パーセントあるかを示す指標です。</div>
+        <div style="margin-bottom:6px;"><span style="font-weight:600;">(c) 上がりターン平均</span><br>上がったセットにおいて、何ターンかかったかの平均を表しています。</div>
+        <div style="margin-bottom:6px;"><span style="font-weight:600;">(d) セット点数平均</span><br>各セットの点数の平均です。「セットの合計得点 ÷ セット数」で算出しています。</div>
+        <div style="margin-bottom:10px;"><span style="font-weight:600;">(e) 平均ブレイク本数</span><br>先行の1投目で何点獲得したかの平均点です。</div>
+
+        <div style="font-weight:700;margin:14px 0 6px;">3. 平均投擲得点について</div>
+        <p style="margin:0 0 10px;">「個人が獲得した点数の合計 ÷ 総投擲回数」で求めています。例えば、バーストして39点から25点に戻った場合でも、本来獲得した12点（あるいは記録上の点数）がそのまま計算に含まれるため、バーストによる減退の影響が考慮されません。</p>
+
+        <div style="font-weight:700;margin:14px 0 6px;">4. 平均投擲時間</div>
+        <p style="margin:0;">点数が入力されてから次の点数が入力されるまでの時間を計測したものです。モルック協会が定める規定の投擲時間とは定義が異なりますので、参考値としてご覧ください。</p>
+      </div>
+    </div>`;}
+
 // ===== 成績閲覧 =====
 function rViewPortal(){
   const vs=_viewState;
@@ -5026,34 +5101,9 @@ function rViewPortal(){
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-view">← 戻る</button>
       <div style="font-size:18px;font-weight:700;">投擲成績</div>
-      <button class="btn btn-gray btn-sm" id="btn-stats-help" style="margin-left:auto;font-size:12px;">成績の見方</button>
+      ${statsHelpBtn_()}
     </div>
-    <!-- 成績の見方モーダル -->
-    <div id="stats-help-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;overflow-y:auto;padding:16px;">
-      <div style="background:#fff;border-radius:12px;max-width:540px;margin:0 auto;padding:20px;font-size:13px;line-height:1.7;color:#374151;">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">
-          <div style="font-size:16px;font-weight:700;">📖 成績詳細ページ</div>
-          <button id="btn-stats-help-close" style="background:none;border:none;font-size:20px;cursor:pointer;color:#6b7280;">✕</button>
-        </div>
-        <p style="margin:0 0 10px;">大会全体の成績、チーム別の成績、個人別の成績を見ることができます。</p>
-
-        <div style="font-weight:700;margin:14px 0 6px;">1. 大会基本情報</div>
-        <p style="margin:0 0 10px;">参加者数と総投擲回数を示しており、その下に勝率を表示しています。先行セットと後行セットの勝率を足しても100%にならない場合がありますが、これは予選に引き分けのセットが含まれているためです。その分が加味されているものとしてご確認ください。</p>
-
-        <div style="font-weight:700;margin:14px 0 6px;">2. スタッツ項目</div>
-        <div style="margin-bottom:6px;"><span style="font-weight:600;">(a) QH率（クオリティヒット率）</span><br>狙い通りの基準（詳細は別紙参照）に当てはまった投擲の割合を計算しています。</div>
-        <div style="margin-bottom:6px;"><span style="font-weight:600;">(b) フォルト率</span><br>総投擲回数に対して、0点だった投擲が何パーセントあるかを示す指標です。</div>
-        <div style="margin-bottom:6px;"><span style="font-weight:600;">(c) 上がりターン平均</span><br>上がったセットにおいて、何ターンかかったかの平均を表しています。</div>
-        <div style="margin-bottom:6px;"><span style="font-weight:600;">(d) セット点数平均</span><br>各セットの点数の平均です。「セットの合計得点 ÷ セット数」で算出しています。</div>
-        <div style="margin-bottom:10px;"><span style="font-weight:600;">(e) 平均ブレイク本数</span><br>先行の1投目で何点獲得したかの平均点です。</div>
-
-        <div style="font-weight:700;margin:14px 0 6px;">3. 平均投擲得点について</div>
-        <p style="margin:0 0 10px;">「個人が獲得した点数の合計 ÷ 総投擲回数」で求めています。例えば、バーストして39点から25点に戻った場合でも、本来獲得した12点（あるいは記録上の点数）がそのまま計算に含まれるため、バーストによる減退の影響が考慮されません。</p>
-
-        <div style="font-weight:700;margin:14px 0 6px;">4. 平均投擲時間</div>
-        <p style="margin:0;">点数が入力されてから次の点数が入力されるまでの時間を計測したものです。モルック協会が定める規定の投擲時間とは定義が異なりますので、参考値としてご覧ください。</p>
-      </div>
-    </div>
+    ${statsHelpHtml_()}
     <div style="margin-bottom:12px;">
       <select id="view-event-select" style="font-size:14px;">
         <option value="">-- 大会を選択 --</option>
@@ -5106,7 +5156,9 @@ function rViewTeamDetail(){
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-view-detail">← 戻る</button>
       <div style="font-size:16px;font-weight:700;">${t.teamName}</div>
+      ${statsHelpBtn_()}
     </div>
+    ${statsHelpHtml_()}
     <div class="card" style="padding:14px;margin-bottom:12px;">
       <div style="font-size:12px;color:#6b7280;margin-bottom:4px;">メンバー</div>
       <div style="font-size:14px;">${(t.members||[]).join(' / ')||'未登録'}</div>
@@ -5203,11 +5255,16 @@ function rViewPersonDetail(){
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-view-detail">← 戻る</button>
       <div style="font-size:16px;font-weight:700;">${p.name}</div>
+      ${statsHelpBtn_()}
     </div>
+    ${statsHelpHtml_()}
     ${p.eventCode?`<div style="display:flex;gap:6px;margin-bottom:12px;">
       ${modeBtn('event','大会ごと')}
       ${modeBtn('cumul','通算')}
-    </div>`:`<div style="font-size:12px;color:#6b7280;font-weight:700;margin-bottom:10px;">通算の成績</div>`}
+    </div>`:`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
+      <div style="font-size:12px;color:#6b7280;font-weight:700;">通算の成績</div>
+      <button id="btn-vp-events" style="padding:7px 12px;font-size:12.5px;font-weight:700;background:#FFCB3D;border:none;border-radius:8px;color:#2b2100;cursor:pointer;">大会別の成績</button>
+    </div>`}
     ${mode==='event'?`<div class="card" style="padding:10px 14px;margin-bottom:12px;background:#f0f9ff;">
       <div style="font-size:12px;color:#0369a1;">大会: ${evNameOf_(p.eventCode)} ／ ${p.teamName}（No.${p.teamNo}）</div>
     </div>`:''}
@@ -5342,7 +5399,9 @@ function rViewRanking(type){
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-ranking">← 戻る</button>
       <div style="font-size:16px;font-weight:700;">🏅 ${type==='team'?'チーム':'個人'}${vs.rankCumulOnly?'の通算':''}ランキング</div>
+      ${statsHelpBtn_()}
     </div>
+    ${statsHelpHtml_()}
     ${modeTabs}
     <div class="card" style="padding:12px;margin-bottom:12px;">
       <div style="font-size:13px;color:#6b7280;margin-bottom:8px;">指標を選択（タップで読み込み）</div>
@@ -10621,6 +10680,11 @@ function bind(){
     if(e.target===statsHelpModal)statsHelpModal.style.display='none';
   };
 
+  // 【2026-10-27】大会別の成績
+  const bvpe=document.getElementById('btn-vp-events');if(bvpe)bvpe.onclick=()=>openPersonEvents_();
+  const bbvpe=document.getElementById('btn-bk-vp-events');
+  if(bbvpe)bbvpe.onclick=()=>{const b=(_viewState.pev&&_viewState.pev.base)||{};_viewState.selectedPerson=b.person||null;_viewState.cumulData=b.cumul||null;_viewState.personMode='cumul';_viewState.detailBack=b.back||null;_viewState.loading=false;S.phase='viewPersonDetail';render();try{window.scrollTo(0,0);}catch(e){}};
+  document.querySelectorAll('.vp-ev').forEach(el=>el.onclick=()=>{const r=_viewState.pev&&_viewState.pev.rows&&_viewState.pev.rows[parseInt(el.dataset.i,10)];if(r)openPsPerson_(_viewState.pev.name,r.ev,r.tn,'viewPersonEvents');});
   const bbkvd=document.getElementById('btn-bk-view-detail');
   if(bbkvd)bbkvd.onclick=()=>{const bk=_viewState.detailBack;_viewState.detailBack=null;_viewState.selectedTeam=null;_viewState.selectedPerson=null;_viewState.personMode='event';_viewState.cumulData=null;S.phase=bk||'viewPortal';render();};
 
