@@ -3131,7 +3131,7 @@ function rBeginner(){
          ['<b>トーナメントの状況は？</b>','トーナメント表'],
          ['<b>トイレ・駐車場・行き方は？</b>','会場の詳細'],
          ['<b>自分の成績を見たい</b>','投擲成績'],
-         ['<b>過去の試合の記録を見たい</b>','過去のスコアシート']])
+         ['<b>過去の試合の記録を見たい</b>','過去大会の結果 → 大会を選んで「スコアシート」']])
       +P('「投擲成績」は大会終了後に情報が更新されます。前の大会の結果は「過去大会の結果」で見られます。')
       +P('<b>分からなくなったら、その場でスタッフにお声がけください。</b>'))
 
@@ -3454,9 +3454,10 @@ function rSetup(){
     <!-- 【8-8】「試合」の欄のボタンは、開催中の大会のカードの中へ移した（liveMatchBtnsHtml） -->
     ${_upcomingCard}
     <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">成績・記録</div>
-    <!-- 【2026-10-27】「成績を見る」「スコアシートを検索」→ 投擲成績・過去大会の結果・過去のスコアシート の3つ（白地・黄色の枠・横1行） -->
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
-      ${[['btn-go-view-portal','投擲成績'],['btn-go-past','過去大会の結果'],['btn-go-score-search','過去のスコアシート']].map(([id,l])=>`<button id="${id}" style="padding:12px 4px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.35;">${l}</button>`).join('')}
+    <!-- 【2026-10-27】「成績を見る」「スコアシートを検索」→ 投擲成績・過去大会の結果 の2つ（白地・黄色の枠・横1行）。
+         スコアシートは「過去大会の結果」の各大会の画面から開く -->
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      ${[['btn-go-view-portal','投擲成績'],['btn-go-past','過去大会の結果']].map(([id,l])=>`<button id="${id}" style="padding:12px 4px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.35;">${l}</button>`).join('')}
     </div>
   </div>`;
 }
@@ -3563,6 +3564,7 @@ function rPastEvent(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       ${btn('bracketPick','トーナメント表')}
       ${btn('prelim','予選成績')}
+      <button id="btn-past-sheet" style="grid-column:1 / -1;padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">スコアシート</button>
       ${btn('regulation','レギュレーション')}
       ${btn('schedule','タイムスケジュール')}
       ${btn('tourinfo','大会の詳細')}
@@ -5470,15 +5472,17 @@ function rScoreSearch(){
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-score-search">← 戻る</button>
-      <div style="font-size:18px;font-weight:700;">過去のスコアシート</div>
+      <div style="font-size:18px;font-weight:700;">スコアシート</div>
     </div>
     ${ss.loading?`<div style="text-align:center;padding:32px;color:#6b7280;"><div style="font-size:24px;">⏳</div><div>読み込み中...</div></div>`:`
     <div class="card" style="padding:14px;margin-bottom:12px;">
-      <div style="font-size:13px;color:#6b7280;margin-bottom:6px;font-weight:600;">大会を選択</div>
+      ${ss.fromPast?`<div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(ss.eventCode,true))}</div>
+      <div style="font-size:15px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-bottom:12px;">${escSc_(evNameOf_(ss.eventCode))}</div>`
+      :`<div style="font-size:13px;color:#6b7280;margin-bottom:6px;font-weight:600;">大会を選択</div>
       <select id="ss-event-select" style="font-size:14px;margin-bottom:12px;">
         <option value="">-- 大会を選択 --</option>
         ${evOpts}
-      </select>
+      </select>`}
       ${ssTeamBlockHtml(ss,false)}
       <button class="btn btn-gold" id="btn-ss-search" style="width:100%;padding:12px;font-size:15px;">🔍 試合一覧を検索</button>
     </div>
@@ -5516,8 +5520,7 @@ function ssTeamBlockHtml(ss,compact){
 function rScoreMatchList(){
   const ss=_scoreState;
   const matches=ss.matchList||[];
-  const myS=getValidMyTeam();
-  const personalized=!!myS;
+  const personalized=false;   // 【2026-10-27】受付済みでも、自分のチームに合わせた出し方はしない
   const expanded=!!ss.expanded;
   // 大会選択肢
   const evOpts=evOptionsHtml_(ss.events,ss.eventCode);   // 【2026-10-27】新しい大会が上
@@ -10668,62 +10671,20 @@ function bind(){
     };
   }
 
-  // スコアシート検索
-  const bgss=document.getElementById('btn-go-score-search');
-  if(bgss)bgss.onclick=async()=>{
-    _scoreState.loading=true;_scoreState.error='';_scoreState.events=[];
+  // 【2026-10-27】スコアシート：過去大会の結果の各大会の画面から、その大会を選んだ状態で開く
+  const bpsh=document.getElementById('btn-past-sheet');
+  if(bpsh)bpsh.onclick=()=>{
+    _scoreState.loading=false;_scoreState.error='';_scoreState.events=[];
     _scoreState.matchList=null;_scoreState.expanded=false;
-    _scoreState.eventCode='';   // 【2026-10-27】大会は未選択から
-    S.phase='scoreSearch';render();
-    await loadEventMeta_();
-    const evData=await fetchViewData('getEvents');
-    if(evData&&evData.events){
-      _scoreState.events=evData.events;
-      // 各大会のsettings.jsonを同期して大会名を取得
-      for(const ec of evData.events){
-        const p=String(ec).split('_');
-        const hasLocal=AD.tournaments&&AD.tournaments.find(t=>
-          (p.length>=2&&t.venueCode===p[0]&&t.eventCode===p[1])||
-          t.eventCode===ec
-        );
-        if(!hasLocal){
-          await syncSettingsFromGitHub(ec).catch(()=>{});
-        }
-      }
-      // 【2026-10-27】最初の大会を自動で選ばない（未選択から）
-    }
-    // 受付済みチームがあれば、配信中の大会を自動選択してそのチームの試合一覧を即表示
-    const myS=getValidMyTeam();
-    if(myS&&myS.teamId){
-      const at=activeTour()||{};
-      // スコア用イベントコード（フル）を特定：末尾が大会コードに一致するもの
-      let evMatch=(_scoreState.events||[]).find(e=>{
-        const p=String(e).split('_');
-        const ev=p.length>=2?p[1]:e;
-        return ev===String(at.eventCode||'')&&(!at.venueCode||p[0]===at.venueCode);
-      })||(_scoreState.events||[]).find(e=>{
-        const p=String(e).split('_');return (p.length>=2?p[1]:e)===String(at.eventCode||'');
-      });
-      if(evMatch){
-        _scoreState.eventCode=evMatch;
-        _scoreState.teamNo=String(myS.teamId);
-        _scoreState.loading=true;_scoreState.error='';
-        S.phase='scoreMatchList';render();
-        const d=await fetchViewData('getMatchList',{eventCode:evMatch,teamNo:String(myS.teamId)});
-        _scoreState.matchList=d&&d.matches?d.matches:[];
-        if(!_scoreState.matchList.length)_scoreState.error='該当する試合が見つかりませんでした';
-        _scoreState.loading=false;render();
-        return;
-      }
-    }
-    _scoreState.loading=false;render();
+    _scoreState.eventCode=S._pastKey||'';_scoreState.teamNo='';_scoreState.fromPast=true;
+    S.phase='scoreSearch';render();try{window.scrollTo(0,0);}catch(e){}
   };
 
   const bbkss=document.getElementById('btn-bk-score-search');
-  if(bbkss)bbkss.onclick=()=>{S.phase='setup';render();};
+  if(bbkss)bbkss.onclick=()=>{S.phase=_scoreState.fromPast?'pastEvent':'setup';render();};
 
   const bbksl=document.getElementById('btn-bk-score-list');
-  if(bbksl)bbksl.onclick=()=>{S.phase=getValidMyTeam()?'setup':'scoreSearch';render();};
+  if(bbksl)bbksl.onclick=()=>{S.phase='scoreSearch';render();};
   // スコア一覧：他チーム検索の折りたたみトグル
   const bsst=document.getElementById('btn-ss-toggle');
   if(bsst)bsst.onclick=()=>{_scoreState.expanded=!_scoreState.expanded;render();};
