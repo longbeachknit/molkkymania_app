@@ -3603,9 +3603,7 @@ function rPastEvent(){
       <button id="btn-past-sheet" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">スコアシート</button>
       <button id="btn-past-stats" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">投擲成績</button>
       ${btn('regulation','レギュレーション')}
-      ${btn('schedule','タイムスケジュール')}
-      ${btn('tourinfo','大会の詳細')}
-      ${btn('venue','会場の詳細')}
+      ${(tour&&String(tour.sheetUrl||'').trim())?`<button id="btn-past-sheeturl" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">大会スプシ</button>`:''}
     </div>
   </div>`;
 }
@@ -12115,6 +12113,9 @@ function bind(){
     syncSettingsFromGitHub(k).catch(()=>{}).then(()=>{S._pastLoading=false;renderIfPhase('pastEvent');});
   });
   document.querySelectorAll('.past-stand-all').forEach(b=>b.onclick=()=>{const n=b.dataset.n;S._pastStandAll=Object.assign({},S._pastStandAll||{});S._pastStandAll[n]=!S._pastStandAll[n];render();});
+  // 【2026-10-27】過去大会の画面：大会スプシ（大会設定の sheetUrl。設定が無い大会はボタン自体を出さない）
+  const bpsu=document.getElementById('btn-past-sheeturl');
+  if(bpsu)bpsu.onclick=()=>{const t=tourByCode(String(S._pastKey||'').split('_')[1]||S._pastKey);const u=t&&String(t.sheetUrl||'').trim();if(u)window.open(u,'_blank');};
   const bpt=document.getElementById('btn-past-teams');if(bpt)bpt.onclick=()=>{S._pastTeamsOpen=!S._pastTeamsOpen;render();};
   document.querySelectorAll('.past-open').forEach(b=>b.onclick=()=>{
     const ec=String(S._pastKey||'').split('_')[1]||S._pastKey;
