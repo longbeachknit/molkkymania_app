@@ -3563,9 +3563,13 @@ function pastStandHtml_(teams,tour){
     </div>`).join('')}</div>
     ${ranks.length>SHOW?`<button class="past-stand-all" data-n="${n}" style="width:100%;margin-top:8px;padding:8px;background:none;border:none;font-size:12.5px;color:#6b7280;cursor:pointer;">${all[n]?'▲ 閉じる':'▼ すべて見る（'+ranks.length+'チーム）'}</button>`:''}`;
   };
-  if(groups.length===1&&groups[0].n===1)return listHtml(groups[0].ranks,1);   // ①だけの大会は見出しなし（今までどおり）
+  /* 【2026-10-27】どのトーナメントの順位にも入っていないチーム＝予選敗退。一番下にまとめて出す */
+  const inRank=new Set();groups.forEach(g=>g.ranks.forEach(r=>inRank.add(parseInt(r.teamNo,10))));
+  const out=(teams||[]).filter(t=>!inRank.has(parseInt(t.id,10)));
   const head=t=>`<div style="font-size:13px;font-weight:800;color:#8a6d00;background:#FFF7D6;border-radius:6px;padding:5px 8px;margin-top:10px;">${escSc_(t)}</div>`;
-  return groups.map(g=>head(g.name)+listHtml(g.ranks,g.n)).join('');
+  const outHtml=out.length?head('予選敗退')+listHtml(out.map(t=>({rank:'',teamNo:String(t.id)})),4):'';
+  if(groups.length===1&&groups[0].n===1&&!out.length)return listHtml(groups[0].ranks,1);   // ①だけで予選敗退も無い大会は見出しなし
+  return groups.map(g=>head(g.name)+listHtml(g.ranks,g.n)).join('')+outHtml;
 }
 function rPastEvent(){
   const k=S._pastKey||'';
@@ -3587,10 +3591,10 @@ function rPastEvent(){
     </div>
     <div style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:10px;">
       <button id="btn-past-teams" style="display:flex;width:100%;align-items:center;justify-content:space-between;background:none;border:none;padding:0;cursor:pointer;">
-        <span style="font-size:14px;font-weight:800;color:#1a1a1a;">出場${w}${teams.length?'（'+teams.length+'）':''}</span>
+        <span style="font-size:14px;font-weight:800;color:#1a1a1a;">出場選手${teams.length?'（'+teams.length+(w==='選手'?'人':'チーム')+'）':''}</span>
         <span style="font-size:12px;color:#6b7280;">${S._pastLoading?'読み込み中…':(S._pastTeamsOpen?'▲ 閉じる':'▼ 開く')}</span>
       </button>
-      ${S._pastTeamsOpen?(teams.length?`<div style="margin-top:8px;max-height:360px;overflow-y:auto;">${teams.map(t=>`<div style="display:flex;gap:10px;padding:6px 2px;border-bottom:1px solid #f1f2f4;font-size:13px;"><span style="color:#6b7280;min-width:40px;">No.${escSc_(t.id)}</span><span style="font-weight:700;color:#1a1a1a;">${escSc_(t.name||'')}</span></div>`).join('')}</div>`
+      ${S._pastTeamsOpen?(teams.length?`<div style="margin-top:8px;max-height:360px;overflow-y:auto;">${teams.map(t=>{const mem=String(t.members||'').split(/[,、]/).map(x=>x.trim()).filter(Boolean);return `<div style="padding:7px 2px;border-bottom:1px solid #f1f2f4;"><div style="font-size:13.5px;font-weight:700;color:#1a1a1a;">${escSc_(t.name||'')}</div>${mem.length?`<div style="font-size:12px;color:#6b7280;margin-top:2px;">${mem.map(escSc_).join(' / ')}</div>`:''}</div>`;}).join('')}</div>`
         :`<div style="font-size:12.5px;color:#9ca3af;margin-top:6px;">${S._pastLoading?'読み込み中…':'データがありません'}</div>`):''}
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
@@ -8323,7 +8327,7 @@ function rTournamentInfo(){
       const rk=t=>{const n=parseInt(t.rank,10);return isNaN(n)?99999:n;};
       const list=teams.slice().sort((a,b)=>rk(a)-rk(b)||parseInt(a.teamNo,10)-parseInt(b.teamNo,10));
       const _rt=tiTour();
-      const conf=S._tiPrelimConfirmed===true;
+      const conf=S._tiPrelimConfirmed===true||S._tiReturn==='pastEvent';   // 過去大会は確定あつかい
       const bd='border:1px solid #1f2937;';
       const th=bd+'padding:6px 3px;font-size:11px;color:#111;font-weight:700;background:#d1d5db;white-space:nowrap;text-align:center;';
       const td=bd+'padding:7px 4px;font-size:12.5px;background:#fff;';
@@ -8363,7 +8367,8 @@ function rTournamentInfo(){
     })():'';
     /* 【8-8】予選結果が確定する前は「暫定」の警告、確定したら「確定しました」を出す。
          確定の印は、対戦表の「予選結果を確定させる」で配信される（confirmed）。 */
-    const prelimNotice=(!loading&&!err&&teams.length)
+    /* 【2026-10-27】過去大会の結果から開いたときは、もう確定しているので注意書きは出さない */
+    const prelimNotice=(!loading&&!err&&teams.length&&S._tiReturn!=='pastEvent')
       ?(S._tiPrelimConfirmed===true
         ?`<div style="background:#E1F5EE;border:1.5px solid #9FE1CB;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#085041;font-weight:700;line-height:1.6;">予選成績が確定しました。<br><span style="font-weight:600;">これ以降の修正は受け付けられません。</span></div>`
         :`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:14px;font-size:13px;color:#92400e;font-weight:700;line-height:1.6;">予選成績は暫定のものです。${S._tiPrelimLive?`<div style="font-size:12px;font-weight:600;margin-top:6px;padding-top:6px;border-top:1px dashed #fed7aa;">反映済み：予選 ${S._tiPrelimLive.done} / ${S._tiPrelimLive.all} 試合</div>`:''}</div>`)
@@ -8436,13 +8441,13 @@ function rTournamentInfo(){
             <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">引分セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.draws||'0'}</div></div>
             <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">敗北セット</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.losses!=null?sel.losses:'-'}</div></div>
             <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">合計点</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.total||'0'}</div></div>
-            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">${S._tiPrelimConfirmed===true?'順位':'暫定順位'}</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.rank||'-'}</div></div>
+            <div style="text-align:center;background:#FFF7D6;border-radius:8px;padding:10px 4px;"><div style="font-size:11px;color:#6b7280;">${(S._tiPrelimConfirmed===true||S._tiReturn==='pastEvent')?'順位':'暫定順位'}</div><div style="font-size:20px;font-weight:700;color:#1a1a1a;">${sel.rank||'-'}</div></div>
           </div>
           ${(()=>{ /* 【8-8】予選順位による進出先 */
             const adv=advanceOfRank_(tiTour(),sel.rank);
             if(!adv)return'';
             const col=ADV_COLORS_[adv.i%ADV_COLORS_.length];
-            return S._tiPrelimConfirmed===true
+            return (S._tiPrelimConfirmed===true||S._tiReturn==='pastEvent')
               ?`<div style="margin-top:12px;padding:11px 12px;border-radius:10px;background:#FFF3C4;border:1.5px solid #FFCB3D;font-size:15px;font-weight:800;color:#1a1a1a;text-align:center;">${escP(adv.name)}に進出！</div>`
               :`<div style="margin-top:12px;padding:10px 12px;border-radius:10px;background:#FFF7D6;border:1.5px dashed #FFCB3D;font-size:14px;font-weight:700;color:#1a1a1a;text-align:center;">このままいくと <b>${escP(adv.name)}</b> に進出</div>`;
           })()}
