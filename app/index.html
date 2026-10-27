@@ -1625,7 +1625,7 @@ async function fetchFromSupabase_(action,p){
     return {persons:(await sbGet_('v_person_event?'+q)).map(personRow_)};
   }
   if(action==='getPersonDetail'){
-    const r=await sbGet_('v_person_event?'+evq+'member=eq.'+enc_(nm)+'&limit=1');
+    const r=await sbGet_('v_person_event?'+evq+'member=eq.'+enc_(nm)+'&'+(tn?'team_no=eq.'+enc_(pad3_(tn))+'&':'')+'limit=1');
     return {person:r.length?personRow_(r[0]):null};
   }
   if(action==='getCumulative'){
@@ -2685,6 +2685,7 @@ function render(){
   else if(p==='viewPortal')app.innerHTML=rViewPortal();
   else if(p==='pastList')app.innerHTML=rPastList();   // 【2026-10-27】過去大会の結果
   else if(p==='pastEvent')app.innerHTML=rPastEvent();
+  else if(p==='pstat')app.innerHTML=rPStat();   // 【2026-10-27】個人投擲成績
   else if(p==='viewTeamRanking')app.innerHTML=rViewRanking('team');
   else if(p==='viewPersonRanking')app.innerHTML=rViewRanking('person');
   else if(p==='viewTeamList')app.innerHTML=rViewTeamList();
@@ -3130,9 +3131,9 @@ function rBeginner(){
          ['<b>予選の順位は？</b>','予選成績を確認'],
          ['<b>トーナメントの状況は？</b>','トーナメント表'],
          ['<b>トイレ・駐車場・行き方は？</b>','会場の詳細'],
-         ['<b>自分の成績を見たい</b>','投擲成績'],
+         ['<b>自分の成績を見たい</b>','個人投擲成績'],
          ['<b>過去の試合の記録を見たい</b>','過去大会の結果 → 大会を選んで「スコアシート」']])
-      +P('「投擲成績」は大会終了後に情報が更新されます。前の大会の結果は「過去大会の結果」で見られます。')
+      +P('「個人投擲成績」は大会終了後に情報が更新されます。前の大会の結果は「過去大会の結果」で見られます。')
       +P('<b>分からなくなったら、その場でスタッフにお声がけください。</b>'))
 
     +H('bg-l3-7','7. ポイントランキング・CS・FINAL')
@@ -3454,10 +3455,10 @@ function rSetup(){
     <!-- 【8-8】「試合」の欄のボタンは、開催中の大会のカードの中へ移した（liveMatchBtnsHtml） -->
     ${_upcomingCard}
     <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">成績・記録</div>
-    <!-- 【2026-10-27】「成績を見る」「スコアシートを検索」→ 投擲成績・過去大会の結果 の2つ（白地・黄色の枠・横1行）。
+    <!-- 【2026-10-27】過去大会の結果・個人投擲成績 の2つ（白地・黄色の枠・横1行）。
          スコアシートは「過去大会の結果」の各大会の画面から開く -->
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-      ${[['btn-go-view-portal','投擲成績'],['btn-go-past','過去大会の結果']].map(([id,l])=>`<button id="${id}" style="padding:12px 4px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.35;">${l}</button>`).join('')}
+      ${[['btn-go-past','過去大会の結果'],['btn-go-pstat','個人投擲成績']].map(([id,l])=>`<button id="${id}" style="padding:12px 4px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.35;">${l}</button>`).join('')}
     </div>
   </div>`;
 }
@@ -3564,13 +3565,147 @@ function rPastEvent(){
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       ${btn('bracketPick','トーナメント表')}
       ${btn('prelim','予選成績')}
-      <button id="btn-past-sheet" style="grid-column:1 / -1;padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">スコアシート</button>
+      <button id="btn-past-sheet" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">スコアシート</button>
+      <button id="btn-past-stats" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">投擲成績</button>
       ${btn('regulation','レギュレーション')}
       ${btn('schedule','タイムスケジュール')}
       ${btn('tourinfo','大会の詳細')}
       ${btn('venue','会場の詳細')}
     </div>
   </div>`;
+}
+
+/* ===== 【2026-10-27】個人投擲成績 =====
+   チーム名から検索：大会で絞り込み＋キーワード。パネルにメンバー名。押すとメンバーを選び、その大会の成績へ。
+   個人名から検索：大会で絞り込み＋キーワード（選手名・チーム名）。大会を選べばその大会、選ばなければ通算の成績へ。 */
+let _ps={mode:'landing',ev:'',q:'',teams:null,persons:null,loading:false,openTeam:-1};
+async function psLoad_(){
+  _ps.loading=true;
+  try{
+    await loadEventMeta_();
+    if(_ps.mode==='team'&&!_ps.teams){
+      const r=await sbGet_('v_team_event?select=event_code,team_no,team_name,members&order=event_code.desc,team_no');
+      _ps.teams=r.filter(x=>!isTestEvent_(x.event_code));
+    }
+    if(_ps.mode==='person'&&!_ps.persons){
+      const r=await sbGet_('v_person_event?select=member,team_no,team_name,event_code&order=member');
+      _ps.persons=r.filter(x=>!isTestEvent_(x.event_code));
+    }
+  }catch(e){console.error('個人投擲成績の読み込みに失敗',e);}
+  _ps.loading=false;
+}
+function psEvKeys_(rows){return [...new Set((rows||[]).map(x=>x.event_code))];}
+function psHas_(v,q){return String(v||'').toLowerCase().includes(q);}
+function psResultsHtml_(){
+  const q=String(_ps.q||'').trim().toLowerCase();
+  const card='background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:8px;cursor:pointer;';
+  const msg=t=>`<div style="text-align:center;padding:28px 8px;color:#9ca3af;font-size:13px;">${t}</div>`;
+  if(_ps.loading||(_ps.mode==='team'?!_ps.teams:!_ps.persons))return msg('読み込み中...');
+  const LIMIT=100;
+  const more=n=>n>LIMIT?`<div style="font-size:12px;color:#6b7280;text-align:center;padding:6px;">ほか ${n-LIMIT} 件。キーワードで絞り込んでください</div>`:'';
+  const evLine=k=>escSc_((evDateJa_(k,false)?evDateJa_(k,false)+'　':'')+evNameOf_(k));
+  if(_ps.mode==='team'){
+    if(!_ps.ev&&!q)return msg('大会を選ぶか、チーム名を入れてください');
+    const list=_ps.teams.map((t,i)=>({t,i})).filter(({t})=>(!_ps.ev||t.event_code===_ps.ev)&&(!q||psHas_(t.team_name,q)||psHas_(t.team_no,q)))
+      .sort((a,b)=>(evStartMs_(b.t.event_code)-evStartMs_(a.t.event_code))||String(a.t.team_no).localeCompare(String(b.t.team_no)));
+    if(!list.length)return msg('チームが見つかりません');
+    return `<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${list.length} 件</div>`+list.slice(0,LIMIT).map(({t,i})=>{
+      const mem=t.members||[];
+      const open=_ps.openTeam===i;
+      return `<div class="ps-team" data-i="${i}" style="${card}">
+        <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">
+          <div style="min-width:0;">
+            <div style="font-size:14px;font-weight:800;color:#1a1a1a;">${escSc_(t.team_name)}</div>
+            <div style="font-size:11.5px;color:#6b7280;margin-top:2px;">No.${escSc_(t.team_no)}　${evLine(t.event_code)}</div>
+            <div style="font-size:12.5px;color:#374151;margin-top:4px;">${mem.length?mem.map(escSc_).join(' / '):'メンバー未登録'}</div>
+          </div>
+          <div style="color:#9ca3af;font-size:13px;white-space:nowrap;">${open?'▲':'›'}</div>
+        </div>
+        ${open?(mem.length?`<div style="margin-top:10px;padding-top:10px;border-top:1px dashed #FFCB3D;">
+          <div style="font-size:12px;color:#6b7280;font-weight:700;margin-bottom:6px;">誰の成績を見ますか？</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;">${mem.map(n=>`<button class="ps-mem" data-name="${escSc_(n)}" data-ev="${escSc_(t.event_code)}" data-tn="${escSc_(t.team_no)}" style="padding:10px 6px;font-size:13px;font-weight:700;background:#FFCB3D;border:none;border-radius:8px;color:#2b2100;cursor:pointer;">${escSc_(n)}</button>`).join('')}</div>
+        </div>`:`<div style="margin-top:8px;font-size:12px;color:#9ca3af;">メンバーが登録されていません</div>`):''}
+      </div>`;
+    }).join('')+more(list.length);
+  }
+  // 個人名から検索
+  if(_ps.ev){
+    const list=_ps.persons.filter(p=>p.event_code===_ps.ev&&(!q||psHas_(p.member,q)||psHas_(p.team_name,q)));
+    if(!list.length)return msg('選手が見つかりません');
+    return `<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${list.length} 件（この大会の成績）</div>`+list.slice(0,LIMIT).map(p=>`<div class="ps-person" data-name="${escSc_(p.member)}" data-ev="${escSc_(p.event_code)}" data-tn="${escSc_(p.team_no)}" style="${card}display:flex;justify-content:space-between;align-items:center;">
+        <div><div style="font-size:14px;font-weight:800;color:#1a1a1a;">${escSc_(p.member)}</div><div style="font-size:12px;color:#6b7280;margin-top:2px;">${escSc_(p.team_name)}（No.${escSc_(p.team_no)}）</div></div>
+        <div style="color:#9ca3af;font-size:18px;">›</div></div>`).join('')+more(list.length);
+  }
+  if(!q)return msg('名前かチーム名を入れてください（大会を選ばないときは通算の成績です）');
+  const by={};
+  _ps.persons.forEach(p=>{(by[p.member]=by[p.member]||[]).push(p);});
+  const list=Object.keys(by).filter(n=>psHas_(n,q)||by[n].some(p=>psHas_(p.team_name,q))).sort((a,b)=>a.localeCompare(b,'ja'));
+  if(!list.length)return msg('選手が見つかりません');
+  return `<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${list.length} 件（通算の成績）</div>`+list.slice(0,LIMIT).map(n=>{
+    const rows=by[n].slice().sort((a,b)=>evStartMs_(b.event_code)-evStartMs_(a.event_code));
+    const tns=[...new Set(rows.map(r=>r.team_name))];
+    return `<div class="ps-person" data-name="${escSc_(n)}" data-ev="" data-tn="" style="${card}display:flex;justify-content:space-between;align-items:center;">
+      <div style="min-width:0;"><div style="font-size:14px;font-weight:800;color:#1a1a1a;">${escSc_(n)}</div><div style="font-size:12px;color:#6b7280;margin-top:2px;">出場 ${new Set(rows.map(r=>r.event_code)).size} 大会　${escSc_(tns.slice(0,3).join(' / '))}${tns.length>3?' ほか':''}</div></div>
+      <div style="color:#9ca3af;font-size:18px;">›</div></div>`;
+  }).join('')+more(list.length);
+}
+function rPStat(){
+  const head=(id,title)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <button class="btn btn-gray btn-sm" id="${id}">← 戻る</button>
+      <div style="font-size:18px;font-weight:700;">${title}</div>
+    </div>`;
+  if(_ps.mode==='landing'){
+    const lb=(mode,label,sub)=>`<button class="ps-go" data-mode="${mode}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">
+        <div style="font-size:15px;font-weight:800;color:#1a1a1a;">${label}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px;">${sub}</div>
+      </button>`;
+    return `<div style="padding:8px 0 4px;">
+      ${head('btn-bk-ps','個人投擲成績')}
+      ${lb('team','チーム名から検索','チームを探して、メンバーを選ぶと、その大会の成績が見られます')}
+      ${lb('person','個人名から検索','大会を選ぶとその大会の成績、選ばないと通算の成績が見られます')}
+      <button id="btn-ps-rank" style="display:block;width:100%;padding:13px 16px;margin-top:6px;background:#FFCB3D;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;font-size:15px;font-weight:800;color:#2b2100;">個人の通算ランキング</button>
+    </div>`;
+  }
+  const isTeam=_ps.mode==='team';
+  const rows=isTeam?_ps.teams:_ps.persons;
+  return `<div style="padding:8px 0 4px;">
+    ${head('btn-bk-ps',isTeam?'チーム名から検索':'個人名から検索')}
+    <div class="card" style="padding:12px;margin-bottom:12px;">
+      <div style="font-size:12px;color:#6b7280;font-weight:700;margin-bottom:4px;">大会で絞り込む</div>
+      <select id="ps-ev" style="font-size:14px;margin-bottom:10px;">
+        <option value="">${isTeam?'すべての大会':'すべての大会（通算の成績）'}</option>
+        ${evOptionsHtml_(psEvKeys_(rows),_ps.ev)}
+      </select>
+      <div style="font-size:12px;color:#6b7280;font-weight:700;margin-bottom:4px;">キーワード</div>
+      <input type="text" id="ps-q" value="${escSc_(_ps.q||'')}" placeholder="${isTeam?'チーム名・チームNo':'選手名・チーム名'}" style="font-size:14px;"/>
+    </div>
+    <div id="ps-results">${psResultsHtml_()}</div>
+  </div>`;
+}
+async function openPsPerson_(name,ev,tn){
+  _viewState.detailBack='pstat';
+  _viewState.loading=true;_viewState.selectedPerson=null;_viewState.persons=[];_viewState.cumulData=null;
+  S.phase='viewPersonDetail';render();try{window.scrollTo(0,0);}catch(e){}
+  if(ev){
+    const d=await fetchViewData('getPersonDetail',{eventCode:ev,name,teamNo:tn});
+    _viewState.selectedPerson=d&&d.person?d.person:{name,eventCode:ev,teamNo:tn};
+    _viewState.personMode='event';
+  }else{
+    const cd=await fetchViewData('getCumulative',{name});
+    const c=cd&&cd.persons&&cd.persons[0]?cd.persons[0]:null;
+    _viewState.selectedPerson=c?Object.assign({},c,{eventCode:''}):{name};
+    _viewState.cumulData=c;_viewState.personMode='cumul';
+  }
+  _viewState.loading=false;renderIfPhase('viewPersonDetail');
+}
+function bindPsResults_(){
+  document.querySelectorAll('.ps-team').forEach(el=>el.onclick=()=>{
+    const i=parseInt(el.dataset.i,10);
+    _ps.openTeam=_ps.openTeam===i?-1:i;
+    const box=document.getElementById('ps-results');if(box){box.innerHTML=psResultsHtml_();bindPsResults_();}
+  });
+  document.querySelectorAll('.ps-mem').forEach(el=>el.onclick=e=>{e.stopPropagation();openPsPerson_(el.dataset.name,el.dataset.ev,el.dataset.tn);});
+  document.querySelectorAll('.ps-person').forEach(el=>el.onclick=()=>openPsPerson_(el.dataset.name,el.dataset.ev||'',el.dataset.tn||''));
 }
 
 function rFirst(){
@@ -4768,22 +4903,6 @@ function showRuleModal(prefix,idx){
 // ===== 成績閲覧 =====
 function rViewPortal(){
   const vs=_viewState;
-  /* 【2026-10-27】最初に「大会から検索／チームから検索／個人から検索」の3つを出す */
-  if(vs.landing){
-    const lb=(tab,label,sub)=>`<button class="view-landing" data-tab="${tab}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">
-        <div style="font-size:15px;font-weight:800;color:#1a1a1a;">${label}</div>
-        <div style="font-size:12px;color:#6b7280;margin-top:2px;">${sub}</div>
-      </button>`;
-    return`<div style="padding:8px 0 4px;">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
-        <button class="btn btn-gray btn-sm" id="btn-bk-view">← 戻る</button>
-        <div style="font-size:18px;font-weight:700;">投擲成績</div>
-      </div>
-      ${lb('event','大会から検索','大会全体の成績（勝率・QH率・フォルト率など）')}
-      ${lb('team','チームから検索','チームごとの成績とランキング')}
-      ${lb('person','個人から検索','選手ごとの成績とランキング')}
-    </div>`;
-  }
   // シングルス大会は「チームの成績」と「個人の成績」が同じ中身になるため、チームのボタンを出さない
   const _sglView=isSinglesEventCode(vs.eventCode);
   if(_sglView&&vs.tab==='team')vs.tab='person';
@@ -5052,12 +5171,12 @@ function rViewPersonDetail(){
       <button class="btn btn-gray btn-sm" id="btn-bk-view-detail">← 戻る</button>
       <div style="font-size:16px;font-weight:700;">${p.name}</div>
     </div>
-    <div style="display:flex;gap:6px;margin-bottom:12px;">
+    ${p.eventCode?`<div style="display:flex;gap:6px;margin-bottom:12px;">
       ${modeBtn('event','大会ごと')}
       ${modeBtn('cumul','通算')}
-    </div>
+    </div>`:`<div style="font-size:12px;color:#6b7280;font-weight:700;margin-bottom:10px;">通算の成績</div>`}
     ${mode==='event'?`<div class="card" style="padding:10px 14px;margin-bottom:12px;background:#f0f9ff;">
-      <div style="font-size:12px;color:#0369a1;">大会: ${getEventName(p.eventCode)} ／ ${p.teamName}（No.${p.teamNo}）</div>
+      <div style="font-size:12px;color:#0369a1;">大会: ${evNameOf_(p.eventCode)} ／ ${p.teamName}（No.${p.teamNo}）</div>
     </div>`:''}
     <div class="card" style="padding:14px;margin-bottom:12px;">
       <div style="font-size:14px;font-weight:700;margin-bottom:8px;">勝敗</div>
@@ -5133,7 +5252,7 @@ function rViewRanking(type){
   const rankPersonMode=vs.rankPersonMode||'event';
 
   // モード切り替えタブ（個人のみ）
-  const modeTabs=type==='person'?`
+  const modeTabs=(type==='person'&&!vs.rankCumulOnly)?`
     <div style="display:flex;gap:6px;margin-bottom:12px;">
       <button class="btn ${rankPersonMode==='event'?'btn-gold':'btn-gray'} btn-sm" id="vrpm-event" style="flex:1;">大会ごと</button>
       <button class="btn ${rankPersonMode==='cumul'?'btn-gold':'btn-gray'} btn-sm" id="vrpm-cumul" style="flex:1;">通算</button>
@@ -5189,7 +5308,7 @@ function rViewRanking(type){
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-ranking">← 戻る</button>
-      <div style="font-size:16px;font-weight:700;">🏅 ${type==='team'?'チーム':'個人'}ランキング</div>
+      <div style="font-size:16px;font-weight:700;">🏅 ${type==='team'?'チーム':'個人'}${vs.rankCumulOnly?'の通算':''}ランキング</div>
     </div>
     ${modeTabs}
     <div class="card" style="padding:12px;margin-bottom:12px;">
@@ -10411,47 +10530,47 @@ function bind(){
     AD.githubPat=pat;saveAdmin(AD);
     alert('✅ Tokenを保存しました');
   };
-  // 成績閲覧ボタン
-  const bgvp=document.getElementById('btn-go-view-portal');
-  if(bgvp)bgvp.onclick=async()=>{
-    // 【2026-10-27】最初は3つの検索ボタン。大会は未選択から
-    _viewState.landing=true;_viewState.eventCode='';_viewState.eventStat=null;_viewState.teams=[];_viewState.persons=[];
-    _viewState.loading=true;_viewState.error='';
-    S.phase='viewPortal';render();
-    await loadEventMeta_();
-    // 大会一覧を取得
-    const evData=await fetchViewData('getEvents');
-    if(evData&&evData.events){
-      _viewState.events=evData.events;
-      // 各大会のsettings.jsonを同期してAD.tournamentsに大会名を取得
-      for(const ec of evData.events){
-        const p=String(ec).split('_');
-        const hasLocal=AD.tournaments&&AD.tournaments.find(t=>
-          (p.length>=2&&t.venueCode===p[0]&&t.eventCode===p[1])||
-          t.eventCode===ec
-        );
-        if(!hasLocal){
-          await syncSettingsFromGitHub(ec).catch(()=>{});
-        }
-      }
-      // 【2026-10-27】最初の大会を自動で選ばない（未選択から）
-    }
-    // 選択中大会の現在タブのデータのみ取得
-    if(_viewState.eventCode){
-      await loadViewData(_viewState.eventCode,_viewState.tab);
-    }
-    _viewState.loading=false;renderIfPhase('viewPortal');
+  // 【2026-10-27】個人投擲成績
+  const bgps=document.getElementById('btn-go-pstat');
+  if(bgps)bgps.onclick=()=>{_ps.mode='landing';S.phase='pstat';render();try{window.scrollTo(0,0);}catch(e){}loadEventMeta_();};
+  const bbkps=document.getElementById('btn-bk-ps');
+  if(bbkps)bbkps.onclick=()=>{
+    if(_ps.mode!=='landing'){_ps.mode='landing';render();return;}
+    S.phase='setup';render();
+  };
+  document.querySelectorAll('.ps-go').forEach(b=>b.onclick=async()=>{
+    _ps.mode=b.dataset.mode;_ps.ev='';_ps.q='';_ps.openTeam=-1;
+    render();try{window.scrollTo(0,0);}catch(e){}
+    await psLoad_();renderIfPhase('pstat');
+  });
+  const pse=document.getElementById('ps-ev');
+  if(pse)pse.onchange=()=>{_ps.ev=pse.value;_ps.openTeam=-1;const box=document.getElementById('ps-results');if(box){box.innerHTML=psResultsHtml_();bindPsResults_();}};
+  const psq=document.getElementById('ps-q');
+  if(psq)psq.oninput=()=>{_ps.q=psq.value;_ps.openTeam=-1;const box=document.getElementById('ps-results');if(box){box.innerHTML=psResultsHtml_();bindPsResults_();}};
+  bindPsResults_();
+  const bpsr=document.getElementById('btn-ps-rank');
+  if(bpsr)bpsr.onclick=()=>{
+    _viewState.rankType='person';_viewState.rankMetric='';_viewState.rankData=[];
+    _viewState.rankPersonMode='cumul';_viewState.rankCumulOnly=true;
+    S.phase='viewPersonRanking';render();try{window.scrollTo(0,0);}catch(e){}
+  };
+
+  // 【2026-10-27】過去大会の画面から：その大会を選んだ状態で「大会から検索」を開く
+  const bpst=document.getElementById('btn-past-stats');
+  if(bpst)bpst.onclick=async()=>{
+    const k=S._pastKey||'';
+    _viewState.tab='event';_viewState.eventCode=k;
+    _viewState.selectedTeam=null;_viewState.selectedPerson=null;
+    _viewState.eventStat=null;_viewState.teams=[];_viewState.persons=[];_viewState.cumulData=null;
+    _viewState.error='';
+    if(!(_viewState.events||[]).includes(k))_viewState.events=[k].concat(_viewState.events||[]);
+    S.phase='viewPortal';render();try{window.scrollTo(0,0);}catch(e){}
+    fetchViewData('getEvents').then(d=>{if(d&&d.events){_viewState.events=d.events.includes(k)?d.events:[k].concat(d.events);renderIfPhase('viewPortal');}}).catch(()=>{});
+    await loadViewData(k,'event');renderIfPhase('viewPortal');
   };
 
   const bbkv=document.getElementById('btn-bk-view');
-  if(bbkv)bbkv.onclick=()=>{
-    if(!_viewState.landing){_viewState.landing=true;render();return;}   // 【2026-10-27】検索の画面 → 3つのボタンへ
-    S.phase='setup';render();
-  };
-  document.querySelectorAll('.view-landing').forEach(b=>b.onclick=async()=>{
-    _viewState.landing=false;_viewState.tab=b.dataset.tab||'event';render();
-    if(_viewState.eventCode){await loadViewData(_viewState.eventCode,_viewState.tab);renderIfPhase('viewPortal');}
-  });
+  if(bbkv)bbkv.onclick=()=>{S.phase='pastEvent';render();};   // 【2026-10-27】この画面は過去大会の画面から開く
 
   const btnStatsHelp=document.getElementById('btn-stats-help');
   if(btnStatsHelp)btnStatsHelp.onclick=()=>{
@@ -10469,24 +10588,24 @@ function bind(){
   };
 
   const bbkvd=document.getElementById('btn-bk-view-detail');
-  if(bbkvd)bbkvd.onclick=()=>{_viewState.selectedTeam=null;_viewState.selectedPerson=null;_viewState.personMode='event';_viewState.cumulData=null;S.phase='viewPortal';render();};
+  if(bbkvd)bbkvd.onclick=()=>{const bk=_viewState.detailBack;_viewState.detailBack=null;_viewState.selectedTeam=null;_viewState.selectedPerson=null;_viewState.personMode='event';_viewState.cumulData=null;S.phase=bk||'viewPortal';render();};
 
   // ランキングボタン（画面に飛ぶだけ、データは指標選択時に取得）
   const btnTR=document.getElementById('btn-team-ranking');
   if(btnTR)btnTR.onclick=()=>{
     _viewState.rankType='team';_viewState.rankMetric='';
-    _viewState.rankData=[];S.phase='viewTeamRanking';render();
+    _viewState.rankData=[];_viewState.rankCumulOnly=false;S.phase='viewTeamRanking';render();
   };
   const btnPR=document.getElementById('btn-person-ranking');
   if(btnPR)btnPR.onclick=()=>{
     _viewState.rankType='person';_viewState.rankMetric='';
-    _viewState.rankData=[];_viewState.rankPersonMode='event';
+    _viewState.rankData=[];_viewState.rankPersonMode='event';_viewState.rankCumulOnly=false;
     S.phase='viewPersonRanking';render();
   };
 
   // ランキング戻るボタン
   const btnBR=document.getElementById('btn-bk-ranking');
-  if(btnBR)btnBR.onclick=()=>{S.phase='viewPortal';render();};
+  if(btnBR)btnBR.onclick=()=>{if(_viewState.rankCumulOnly){_viewState.rankCumulOnly=false;S.phase='pstat';render();return;}S.phase='viewPortal';render();};
 
   // 個人ランキングモード切り替え（大会ごと/通算）
   const vrpmE=document.getElementById('vrpm-event');
@@ -10533,6 +10652,7 @@ function bind(){
   document.querySelectorAll('[data-rank-cumul]').forEach(btn=>{
     btn.addEventListener('click',async()=>{
       const name=btn.dataset.rankCumul;
+      _viewState.detailBack=_viewState.rankCumulOnly?'viewPersonRanking':null;
       _viewState.loading=true;S.phase='viewPersonDetail';render();
       const cd=await fetchViewData('getCumulative',{name});
       const cumulPerson=cd&&cd.persons&&cd.persons[0]?cd.persons[0]:null;
