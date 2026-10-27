@@ -2683,6 +2683,8 @@ function render(){
   else if(p==='scoreMatchList')app.innerHTML=rScoreMatchList();
   else if(p==='scoreView')app.innerHTML=rScoreView();
   else if(p==='viewPortal')app.innerHTML=rViewPortal();
+  else if(p==='pastList')app.innerHTML=rPastList();   // 【2026-10-27】過去大会の結果
+  else if(p==='pastEvent')app.innerHTML=rPastEvent();
   else if(p==='viewTeamRanking')app.innerHTML=rViewRanking('team');
   else if(p==='viewPersonRanking')app.innerHTML=rViewRanking('person');
   else if(p==='viewTeamList')app.innerHTML=rViewTeamList();
@@ -3128,9 +3130,9 @@ function rBeginner(){
          ['<b>予選の順位は？</b>','予選成績を確認'],
          ['<b>トーナメントの状況は？</b>','トーナメント表'],
          ['<b>トイレ・駐車場・行き方は？</b>','会場の詳細'],
-         ['<b>自分の成績を見たい</b>','📊 成績を見る'],
-         ['<b>過去の試合の記録を見たい</b>','📋 スコアシートを見る']])
-      +P('「📊 成績を見る」のボタンは大会終了後に情報が更新されます。')
+         ['<b>自分の成績を見たい</b>','投擲成績'],
+         ['<b>過去の試合の記録を見たい</b>','過去のスコアシート']])
+      +P('「投擲成績」は大会終了後に情報が更新されます。前の大会の結果は「過去大会の結果」で見られます。')
       +P('<b>分からなくなったら、その場でスタッフにお声がけください。</b>'))
 
     +H('bg-l3-7','7. ポイントランキング・CS・FINAL')
@@ -3299,7 +3301,6 @@ function rSetup(){
   }
   const courtLabel=_my?'対戦コート<br>を見る':'対戦コート<br>を検索';
   const courtIcon=_my?'📍':'🔍';
-  const scoreLabel=_my?'スコアシート<br>を見る':'スコアシート<br>を検索';
 
   const escH=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   // 開催中の大会情報（大会名・会場・日付）
@@ -3453,15 +3454,119 @@ function rSetup(){
     <!-- 【8-8】「試合」の欄のボタンは、開催中の大会のカードの中へ移した（liveMatchBtnsHtml） -->
     ${_upcomingCard}
     <div style="font-size:11px;font-weight:800;color:#242528;letter-spacing:0.08em;margin-bottom:8px;border-left:3px solid #FFB800;padding-left:7px;">成績・記録</div>
-    <div style="display:flex;gap:8px;">
-      <button id="btn-go-view-portal" style="flex:1;padding:10px 6px;background:#FFB347;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📊</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">成績を見る</div>
+    <!-- 【2026-10-27】「成績を見る」「スコアシートを検索」→ 投擲成績・過去大会の結果・過去のスコアシート の3つ（白地・黄色の枠・横1行） -->
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+      ${[['btn-go-view-portal','投擲成績'],['btn-go-past','過去大会の結果'],['btn-go-score-search','過去のスコアシート']].map(([id,l])=>`<button id="${id}" style="padding:12px 4px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;line-height:1.35;">${l}</button>`).join('')}
+    </div>
+  </div>`;
+}
+
+/* =========================================================================
+   【2026-10-27】大会の一覧（名前・開催日・会場）を Supabase から1回で読む。
+   投擲成績・過去のスコアシートのプルダウンの並び順（新しい大会が上）と、
+   「過去大会の結果」の一覧に使う。
+   テンプレや動作確認用の大会（会場コード 99・大会コードが 9 から始まる・名前に「確認用」「テンプレ」「実験」）は出さない。
+   ========================================================================= */
+let _evMeta_=null,_evMetaP_=null;
+function loadEventMeta_(){
+  if(_evMeta_)return Promise.resolve(_evMeta_);
+  if(_evMetaP_)return _evMetaP_;
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name',
+      {cache:'no-store',headers:sbHeaders()})
+    .then(r=>r.ok?r.json():[])
+    .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
+    .catch(()=>{_evMetaP_=null;return {};});
+  return _evMetaP_;
+}
+function isTestEvent_(key){
+  const p=String(key||'').split('_');
+  if(p[0]==='99')return true;
+  if(/^9/.test(p[1]||''))return true;
+  const m=_evMeta_&&_evMeta_[key];
+  return !!(m&&/確認用|テンプレ|実験/.test(String(m.name||'')));
+}
+function evStartMs_(key){
+  const m=_evMeta_&&_evMeta_[key];
+  const t=m&&m.start?Date.parse(m.start):NaN;
+  return isNaN(t)?0:t;
+}
+/* 新しい大会が上。テスト用の大会は外す */
+function sortEventsNewest_(keys){
+  return (keys||[]).filter(k=>!isTestEvent_(k)).slice().sort((a,b)=>(evStartMs_(b)-evStartMs_(a))||String(b).localeCompare(String(a)));
+}
+function evDateJa_(key,withDow){
+  const t=evStartMs_(key);
+  if(!t)return '';
+  const d=new Date(t);
+  return d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日'+(withDow?'（'+'日月火水木金土'[d.getDay()]+'）':'');
+}
+function evNameOf_(key){
+  const n=getEventName(key);
+  if(n&&n!==key)return n;
+  const m=_evMeta_&&_evMeta_[key];
+  return (m&&m.name)||key;
+}
+/* プルダウンの1行：「2026年10月10日　大会名」 */
+function evOptionsHtml_(keys,selected){
+  return sortEventsNewest_(keys).map(e=>{
+    const d=evDateJa_(e,false);
+    return `<option value="${escSc_(e)}" ${selected===e?'selected':''}>${escSc_((d?d+'　':'')+evNameOf_(e))}</option>`;
+  }).join('');
+}
+
+/* ===== 【2026-10-27】過去大会の結果 ===== */
+function pastEventKeys_(){
+  const now=Date.now();
+  return sortEventsNewest_(Object.keys(_evMeta_||{})).filter(k=>{const t=evStartMs_(k);return t>0&&t<=now;});
+}
+function rPastList(){
+  const back=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+      <button class="btn btn-gray btn-sm" id="btn-bk-past">← 戻る</button>
+      <div style="font-size:18px;font-weight:700;color:#111;">過去大会の結果</div>
+    </div>`;
+  if(!_evMeta_)return`<div style="padding:8px 0 4px;">${back}<div style="text-align:center;padding:32px;color:#9ca3af;">読み込み中...</div></div>`;
+  const keys=pastEventKeys_();
+  if(!keys.length)return`<div style="padding:8px 0 4px;">${back}<div style="text-align:center;padding:32px;color:#9ca3af;">過去の大会はまだありません</div></div>`;
+  return`<div style="padding:8px 0 4px;">${back}
+    ${keys.map(k=>{const m=_evMeta_[k]||{};return`<button class="past-ev" data-key="${escSc_(k)}" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">
+        <div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(k,true))}${m.vname?'　'+escSc_(m.vname):''}</div>
+        <div style="font-size:15px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-top:2px;">${escSc_(evNameOf_(k))}</div>
+      </button>`;}).join('')}
+  </div>`;
+}
+function rPastEvent(){
+  const k=S._pastKey||'';
+  const m=(_evMeta_&&_evMeta_[k])||{};
+  const ec=String(k).split('_')[1]||k;
+  const tour=tourByCode(ec);
+  const teams=((tour&&tour.teams)||[]).slice().sort((a,b)=>parseInt(a.id,10)-parseInt(b.id,10));
+  const w=wTeam(tour||null);
+  const btn=(view,label)=>`<button class="past-open" data-view="${view}" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;color:#1a1a1a;cursor:pointer;">${label}</button>`;
+  return`<div style="padding:8px 0 4px;">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+      <button class="btn btn-gray btn-sm" id="btn-bk-past-ev">← 戻る</button>
+      <div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(k,true))}${m.vname?'　'+escSc_(m.vname):''}</div>
+    </div>
+    <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-bottom:14px;">${escSc_(evNameOf_(k))}</div>
+    <div style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+      <div style="font-size:14px;font-weight:800;color:#1a1a1a;">最終順位</div>
+      <div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>
+    </div>
+    <div style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:10px;">
+      <button id="btn-past-teams" style="display:flex;width:100%;align-items:center;justify-content:space-between;background:none;border:none;padding:0;cursor:pointer;">
+        <span style="font-size:14px;font-weight:800;color:#1a1a1a;">出場${w}${teams.length?'（'+teams.length+'）':''}</span>
+        <span style="font-size:12px;color:#6b7280;">${S._pastLoading?'読み込み中…':(S._pastTeamsOpen?'▲ 閉じる':'▼ 開く')}</span>
       </button>
-      <button id="btn-go-score-search" style="flex:1;padding:10px 6px;background:#FFB347;color:#2b2100;border:none;border-radius:12px;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;">
-        <span style="font-size:22px;">📋</span>
-        <div style="font-size:13px;font-weight:700;text-align:center;line-height:1.3;">${scoreLabel}</div>
-      </button>
+      ${S._pastTeamsOpen?(teams.length?`<div style="margin-top:8px;max-height:360px;overflow-y:auto;">${teams.map(t=>`<div style="display:flex;gap:10px;padding:6px 2px;border-bottom:1px solid #f1f2f4;font-size:13px;"><span style="color:#6b7280;min-width:40px;">No.${escSc_(t.id)}</span><span style="font-weight:700;color:#1a1a1a;">${escSc_(t.name||'')}</span></div>`).join('')}</div>`
+        :`<div style="font-size:12.5px;color:#9ca3af;margin-top:6px;">${S._pastLoading?'読み込み中…':'データがありません'}</div>`):''}
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+      ${btn('bracketPick','トーナメント表')}
+      ${btn('prelim','予選成績')}
+      ${btn('regulation','レギュレーション')}
+      ${btn('schedule','タイムスケジュール')}
+      ${btn('tourinfo','大会の詳細')}
+      ${btn('venue','会場の詳細')}
     </div>
   </div>`;
 }
@@ -4661,6 +4766,22 @@ function showRuleModal(prefix,idx){
 // ===== 成績閲覧 =====
 function rViewPortal(){
   const vs=_viewState;
+  /* 【2026-10-27】最初に「大会から検索／チームから検索／個人から検索」の3つを出す */
+  if(vs.landing){
+    const lb=(tab,label,sub)=>`<button class="view-landing" data-tab="${tab}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;cursor:pointer;">
+        <div style="font-size:15px;font-weight:800;color:#1a1a1a;">${label}</div>
+        <div style="font-size:12px;color:#6b7280;margin-top:2px;">${sub}</div>
+      </button>`;
+    return`<div style="padding:8px 0 4px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
+        <button class="btn btn-gray btn-sm" id="btn-bk-view">← 戻る</button>
+        <div style="font-size:18px;font-weight:700;">投擲成績</div>
+      </div>
+      ${lb('event','大会から検索','大会全体の成績（勝率・QH率・フォルト率など）')}
+      ${lb('team','チームから検索','チームごとの成績とランキング')}
+      ${lb('person','個人から検索','選手ごとの成績とランキング')}
+    </div>`;
+  }
   // シングルス大会は「チームの成績」と「個人の成績」が同じ中身になるため、チームのボタンを出さない
   const _sglView=isSinglesEventCode(vs.eventCode);
   if(_sglView&&vs.tab==='team')vs.tab='person';
@@ -4670,7 +4791,7 @@ function rViewPortal(){
   const tabHtml=tabs.map(t=>`<button class="btn ${vs.tab===t.id?'btn-gold':'btn-gray'} btn-sm" data-vtab="${t.id}" style="flex:1;padding:8px;font-size:13px;">${t.label}</button>`).join('');
 
   // 大会選択肢（大会名表示）
-  const evOpts=(vs.events||[]).map(e=>`<option value="${e}" ${vs.eventCode===e?'selected':''}>${getEventName(e)}</option>`).join('');
+  const evOpts=evOptionsHtml_(vs.events,vs.eventCode);   // 【2026-10-27】新しい大会が上
 
   let listHtml='';
   if(vs.loading){
@@ -4750,7 +4871,7 @@ function rViewPortal(){
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-view">← 戻る</button>
-      <div style="font-size:18px;font-weight:700;">📊 成績を見る</div>
+      <div style="font-size:18px;font-weight:700;">投擲成績</div>
       <button class="btn btn-gray btn-sm" id="btn-stats-help" style="margin-left:auto;font-size:12px;">成績の見方</button>
     </div>
     <!-- 成績の見方モーダル -->
@@ -5345,11 +5466,11 @@ async function saveScoresheet(){
 // ===== スコアシート検索 =====
 function rScoreSearch(){
   const ss=_scoreState;
-  const evOpts=(ss.events||[]).map(e=>`<option value="${e}" ${ss.eventCode===e?'selected':''}>${getEventName(e)}</option>`).join('');
+  const evOpts=evOptionsHtml_(ss.events,ss.eventCode);   // 【2026-10-27】新しい大会が上
   return`<div style="padding:8px 0 4px;">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-score-search">← 戻る</button>
-      <div style="font-size:18px;font-weight:700;">📋 スコアシートを検索</div>
+      <div style="font-size:18px;font-weight:700;">過去のスコアシート</div>
     </div>
     ${ss.loading?`<div style="text-align:center;padding:32px;color:#6b7280;"><div style="font-size:24px;">⏳</div><div>読み込み中...</div></div>`:`
     <div class="card" style="padding:14px;margin-bottom:12px;">
@@ -5399,7 +5520,7 @@ function rScoreMatchList(){
   const personalized=!!myS;
   const expanded=!!ss.expanded;
   // 大会選択肢
-  const evOpts=(ss.events||[]).map(e=>`<option value="${e}" ${ss.eventCode===e?'selected':''}>${getEventName(e)}</option>`).join('');
+  const evOpts=evOptionsHtml_(ss.events,ss.eventCode);   // 【2026-10-27】新しい大会が上
   const inlineForm=`<div class="card" style="padding:12px;margin-bottom:10px;">
       <div style="font-size:12px;color:#6b7280;margin-bottom:4px;font-weight:600;">大会</div>
       <select id="ss-event-select" style="font-size:13px;margin-bottom:10px;">
@@ -10290,8 +10411,11 @@ function bind(){
   // 成績閲覧ボタン
   const bgvp=document.getElementById('btn-go-view-portal');
   if(bgvp)bgvp.onclick=async()=>{
+    // 【2026-10-27】最初は3つの検索ボタン。大会は未選択から
+    _viewState.landing=true;_viewState.eventCode='';_viewState.eventStat=null;_viewState.teams=[];_viewState.persons=[];
     _viewState.loading=true;_viewState.error='';
     S.phase='viewPortal';render();
+    await loadEventMeta_();
     // 大会一覧を取得
     const evData=await fetchViewData('getEvents');
     if(evData&&evData.events){
@@ -10307,9 +10431,7 @@ function bind(){
           await syncSettingsFromGitHub(ec).catch(()=>{});
         }
       }
-      if(evData.events.length>0&&!_viewState.eventCode){
-        _viewState.eventCode=evData.events[0];
-      }
+      // 【2026-10-27】最初の大会を自動で選ばない（未選択から）
     }
     // 選択中大会の現在タブのデータのみ取得
     if(_viewState.eventCode){
@@ -10319,7 +10441,14 @@ function bind(){
   };
 
   const bbkv=document.getElementById('btn-bk-view');
-  if(bbkv)bbkv.onclick=()=>{S.phase='setup';render();};
+  if(bbkv)bbkv.onclick=()=>{
+    if(!_viewState.landing){_viewState.landing=true;render();return;}   // 【2026-10-27】検索の画面 → 3つのボタンへ
+    S.phase='setup';render();
+  };
+  document.querySelectorAll('.view-landing').forEach(b=>b.onclick=async()=>{
+    _viewState.landing=false;_viewState.tab=b.dataset.tab||'event';render();
+    if(_viewState.eventCode){await loadViewData(_viewState.eventCode,_viewState.tab);renderIfPhase('viewPortal');}
+  });
 
   const btnStatsHelp=document.getElementById('btn-stats-help');
   if(btnStatsHelp)btnStatsHelp.onclick=()=>{
@@ -10544,7 +10673,9 @@ function bind(){
   if(bgss)bgss.onclick=async()=>{
     _scoreState.loading=true;_scoreState.error='';_scoreState.events=[];
     _scoreState.matchList=null;_scoreState.expanded=false;
+    _scoreState.eventCode='';   // 【2026-10-27】大会は未選択から
     S.phase='scoreSearch';render();
+    await loadEventMeta_();
     const evData=await fetchViewData('getEvents');
     if(evData&&evData.events){
       _scoreState.events=evData.events;
@@ -10559,7 +10690,7 @@ function bind(){
           await syncSettingsFromGitHub(ec).catch(()=>{});
         }
       }
-      if(evData.events.length&&!_scoreState.eventCode)_scoreState.eventCode=evData.events[0];
+      // 【2026-10-27】最初の大会を自動で選ばない（未選択から）
     }
     // 受付済みチームがあれば、配信中の大会を自動選択してそのチームの試合一覧を即表示
     const myS=getValidMyTeam();
@@ -11716,7 +11847,8 @@ function bind(){
   // 大会情報サブ画面へのショートカット共通処理
   /* evcode を渡すと、その大会の情報を開く（大会カードのボタン）。
      渡さなければ、これまでどおり開催中の大会。 */
-  async function openTournamentInfoView(view,evcode){
+  async function openTournamentInfoView(view,evcode,ret){
+    S._tiReturn=ret||null;   // 【2026-10-27】'pastEvent' なら「戻る」で過去大会の画面へ
     // 【体感速度改善】先に画面遷移してローディング表示し、通信は裏で実行する
     S._tiEventCode=String(evcode||'');
     S._tiView=view;S._tiLoading=true;S._tiError=null;
@@ -11854,6 +11986,21 @@ function bind(){
   /* 【1-5・8-7にそろえた】大会カードのボタン。開催中カード・開催前カードのどちらからでも、
      そのカードの大会（data-evcode）を開く。 */
   const _cardBtn=(cls,fn)=>document.querySelectorAll('.'+cls).forEach(b=>b.onclick=()=>fn(b.dataset.evcode||''));
+  // 【2026-10-27】過去大会の結果
+  const bgpast=document.getElementById('btn-go-past');
+  if(bgpast)bgpast.onclick=()=>{S.phase='pastList';render();loadEventMeta_().then(()=>renderIfPhase('pastList'));};
+  const bbkp=document.getElementById('btn-bk-past');if(bbkp)bbkp.onclick=()=>{S.phase='setup';render();};
+  const bbkpe=document.getElementById('btn-bk-past-ev');if(bbkpe)bbkpe.onclick=()=>{S.phase='pastList';render();};
+  document.querySelectorAll('.past-ev').forEach(b=>b.onclick=()=>{
+    const k=b.dataset.key||'';
+    S._pastKey=k;S._pastTeamsOpen=false;S._pastLoading=true;S.phase='pastEvent';render();
+    syncSettingsFromGitHub(k).catch(()=>{}).then(()=>{S._pastLoading=false;renderIfPhase('pastEvent');});
+  });
+  const bpt=document.getElementById('btn-past-teams');if(bpt)bpt.onclick=()=>{S._pastTeamsOpen=!S._pastTeamsOpen;render();};
+  document.querySelectorAll('.past-open').forEach(b=>b.onclick=()=>{
+    const ec=String(S._pastKey||'').split('_')[1]||S._pastKey;
+    openTournamentInfoView(b.dataset.view,ec,'pastEvent');
+  });
   _cardBtn('card-btn-venue',      c=>openTournamentInfoView('venue',c));
   _cardBtn('card-btn-tourinfo',   c=>openTournamentInfoView('tourinfo',c));
   _cardBtn('card-btn-schedule',   c=>openTournamentInfoView('schedule',c));
@@ -12296,7 +12443,7 @@ function bind(){
   // 大会情報画面 - メニューの戻る
   const btib=document.getElementById('btn-ti-back');if(btib)btib.onclick=()=>{S._tiView=null;S.phase='setup';render();};
   // サブ画面の戻る → メニュー画面へ（phaseはtournamentInfoのまま、_tiViewだけクリア）
-  const btisb=document.getElementById('btn-ti-sub-back');if(btisb)btisb.onclick=()=>{S._tiView=null;S._tiLoading=false;S._tiError=null;S.phase='setup';render();};
+  const btisb=document.getElementById('btn-ti-sub-back');if(btisb)btisb.onclick=()=>{S._tiView=null;S._tiLoading=false;S._tiError=null;S.phase=(S._tiReturn==='pastEvent')?'pastEvent':'setup';render();};
   // 【8-6】トーナメント表：どちらを見るかを選ぶボタン
   const btb1=document.getElementById('btn-ti-bracket-1');if(btb1)btb1.onclick=()=>loadBracketNo(1);
   const btb2=document.getElementById('btn-ti-bracket-2');if(btb2)btb2.onclick=()=>loadBracketNo(2);
