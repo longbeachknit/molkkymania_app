@@ -3536,6 +3536,24 @@ function rPastList(){
       </button>`;}).join('')}
   </div>`;
 }
+/* 【2026-10-27】最終順位：スプシの「最終順位を送信」で届いたもの（event_docs の standings）。
+   上から10位まで。それより下は「すべて見る」で開く。届いていなければ「準備中」 */
+function pastStandHtml_(teams){
+  const st=S._pastStand;
+  const ranks=(st&&Array.isArray(st.ranks))?st.ranks:[];
+  if(st===undefined)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">読み込み中…</div>`;
+  if(!ranks.length)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>`;
+  const nameOf=no=>{const t=(teams||[]).find(x=>parseInt(x.id,10)===parseInt(no,10));return t?t.name:'';};
+  const SHOW=10;
+  const list=S._pastStandAll?ranks:ranks.slice(0,SHOW);
+  const col=r=>{const n=parseInt(r,10);return n===1?'#d4a000':n===2?'#94a3b8':n===3?'#b45309':'#1a1a1a';};
+  return `<div style="margin-top:8px;">${list.map(r=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f1f2f4;">
+      <span style="min-width:40px;font-size:15px;font-weight:800;color:${col(r.rank)};">${escSc_(r.rank)}位</span>
+      <span style="font-size:12px;color:#6b7280;min-width:52px;">No.${escSc_(r.teamNo)}</span>
+      <span style="font-size:13.5px;font-weight:700;color:#1a1a1a;">${escSc_(nameOf(r.teamNo))}</span>
+    </div>`).join('')}</div>
+    ${ranks.length>SHOW?`<button id="btn-past-stand-all" style="width:100%;margin-top:8px;padding:8px;background:none;border:none;font-size:12.5px;color:#6b7280;cursor:pointer;">${S._pastStandAll?'▲ 閉じる':'▼ すべて見る（'+ranks.length+'チーム）'}</button>`:''}`;
+}
 function rPastEvent(){
   const k=S._pastKey||'';
   const m=(_evMeta_&&_evMeta_[k])||{};
@@ -3552,7 +3570,7 @@ function rPastEvent(){
     <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-bottom:14px;">${escSc_(evNameOf_(k))}</div>
     <div style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:10px;">
       <div style="font-size:14px;font-weight:800;color:#1a1a1a;">最終順位</div>
-      <div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>
+      ${pastStandHtml_(teams)}
     </div>
     <div style="background:#fff;border:1.5px solid #FFCB3D;border-radius:10px;padding:12px 14px;margin-bottom:10px;">
       <button id="btn-past-teams" style="display:flex;width:100%;align-items:center;justify-content:space-between;background:none;border:none;padding:0;cursor:pointer;">
@@ -12074,9 +12092,11 @@ function bind(){
   const bbkpe=document.getElementById('btn-bk-past-ev');if(bbkpe)bbkpe.onclick=()=>{S.phase='pastList';render();};
   document.querySelectorAll('.past-ev').forEach(b=>b.onclick=()=>{
     const k=b.dataset.key||'';
-    S._pastKey=k;S._pastTeamsOpen=false;S._pastLoading=true;S.phase='pastEvent';render();
+    S._pastKey=k;S._pastTeamsOpen=false;S._pastLoading=true;S._pastStand=undefined;S._pastStandAll=false;S.phase='pastEvent';render();
+    sbFetchDoc(k,'standings').then(p=>{S._pastStand=p||null;}).catch(()=>{S._pastStand=null;}).then(()=>{if(S._pastKey===k)renderIfPhase('pastEvent');});
     syncSettingsFromGitHub(k).catch(()=>{}).then(()=>{S._pastLoading=false;renderIfPhase('pastEvent');});
   });
+  const bpsa=document.getElementById('btn-past-stand-all');if(bpsa)bpsa.onclick=()=>{S._pastStandAll=!S._pastStandAll;render();};
   const bpt=document.getElementById('btn-past-teams');if(bpt)bpt.onclick=()=>{S._pastTeamsOpen=!S._pastTeamsOpen;render();};
   document.querySelectorAll('.past-open').forEach(b=>b.onclick=()=>{
     const ec=String(S._pastKey||'').split('_')[1]||S._pastKey;
