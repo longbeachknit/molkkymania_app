@@ -1791,6 +1791,17 @@ function compressImageFile(file,maxDim,quality){
 }
 // 日付の表示用（日本語表記。例: 2026年7月18日 9:00〜18:00）
 // datetime-local 形式（YYYY-MM-DDTHH:MM）を想定。月・時の先頭0は外す。
+/* 【2026-10-29】開催日だけ（時間なし）。例：2026年10月10日（土）／2日以上なら 2026年10月10日（土）〜11日（日） */
+function fmtEventDate_(tour){
+  const toD=v=>{const m=String(v||'').match(/^(\d{4})-(\d{2})-(\d{2})/);return m?new Date(+m[1],+m[2]-1,+m[3]):null;};
+  const a=toD(tour&&tour.eventPeriodStart),b=toD(tour&&tour.eventPeriodEnd);
+  if(!a)return '';
+  const W='日月火水木金土';
+  const one=d=>d.getFullYear()+'年'+(d.getMonth()+1)+'月'+d.getDate()+'日（'+W[d.getDay()]+'）';
+  if(!b||b.getTime()===a.getTime())return one(a);
+  const tail=(b.getFullYear()!==a.getFullYear())?one(b):(b.getMonth()!==a.getMonth())?((b.getMonth()+1)+'月'+b.getDate()+'日（'+W[b.getDay()]+'）'):(b.getDate()+'日（'+W[b.getDay()]+'）');
+  return one(a)+'〜'+tail;
+}
 function fmtEventPeriod(tour){
   const parse=str=>{
     str=String(str||'').trim();if(!str)return null;
@@ -3377,7 +3388,7 @@ function rSetup(){
     return`<button class="live-pick" data-key="${escH(r.event_key)}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:${col}2E;border:1.5px solid ${col};border-radius:14px;cursor:pointer;">
       <div style="font-size:17px;font-weight:800;color:#1a1a1a;line-height:1.35;">${nm}</div>
       ${vn?`<div style="font-size:13px;color:#6b7280;margin-top:6px;">📍 ${vn}</div>`:''}
-      ${t&&fmtEventPeriod(t)?`<div style="font-size:13px;color:#6b7280;margin-top:2px;">🗓 ${escH(fmtEventPeriod(t))}</div>`:''}
+      ${t&&fmtEventDate_(t)?`<div style="font-size:13px;color:#6b7280;margin-top:2px;">🗓 ${escH(fmtEventDate_(t))}</div>`:''}
       <div style="font-size:12px;color:#8a6d00;font-weight:800;margin-top:8px;">この大会を見る ▸</div>
     </button>`;
   };
