@@ -642,10 +642,12 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.priority!==undefined)tour.priority=data.priority;
   // 試合形式。届いていない（古い配信）ときはチーム戦のまま
   if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
+  tour.nameMode=(String(data.nameMode||'')==='nickname')?'nickname':'real';   // 【2026-10-29】届いていない（古い配信）ときは本名
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
   if(data.tourneyRules!==undefined)tour.tourneyRules=data.tourneyRules;
   if(data.roundRules!==undefined)tour.roundRules=data.roundRules;
   if(data.teams!==undefined)tour.teams=decTeams(data.teams);
+  if(data.teamsUpdatedAt!==undefined)tour.teamsUpdatedAt=data.teamsUpdatedAt;   // 【2026-10-28】チーム一覧がいつ入れ替わったか（スプシの「チーム情報送信」など）
   if(data.eventPeriodStart!==undefined)tour.eventPeriodStart=data.eventPeriodStart;
   if(data.eventPeriodEnd!==undefined)tour.eventPeriodEnd=data.eventPeriodEnd;
   if(data.receptionPw!==undefined)tour.receptionPw=data.receptionPw;
@@ -904,7 +906,11 @@ function importTeamsCSV(text){
     const id=(row[0]||'').trim();
     const name=(row[1]||'').trim();
     if(!id||!name)continue;
-    const members=row.slice(2).map(s=>s.trim()).filter(s=>s!=='');
+    const members=[];
+    row.slice(2).map(s=>s.trim()).filter(s=>s!=='').forEach(m=>{
+      if(members.includes(m)){(importTeamsCSV.warns=importTeamsCSV.warns||[]).push('No.'+id+' '+name+'：「'+m+'」が2回あります（1つにまとめました）');return;}
+      members.push(m);
+    });
     teams.push({id,name,members:members.join(',')});
   }
   return teams;
@@ -916,7 +922,9 @@ function triggerTeamsCSV(){
   inp.onchange=async(e)=>{
     const file=e.target.files[0];if(!file)return;
     const text=await file.text();
+    importTeamsCSV.warns=[];
     const imported=importTeamsCSV(text);
+    if(importTeamsCSV.warns.length)alert('同じチームの中に同じ名前があります。\n点数の入力で見分けられなくなるので、1つにまとめました。\n\n'+importTeamsCSV.warns.slice(0,10).join('\n')+(importTeamsCSV.warns.length>10?'\nほか '+(importTeamsCSV.warns.length-10)+'件':''));
     if(!imported.length){
       alert('チームデータが見つかりませんでした。\nA列:チームNo、B列:チーム名、C〜G列:メンバー の形式か確認してください。\n（シングルス大会の場合は B列=モルックネーム、C列=本名フルネーム）');
       return;
@@ -925,6 +933,7 @@ function triggerTeamsCSV(){
     const targetTour2=S._editingTourId?AD.tournaments.find(t=>t.id===S._editingTourId):activeTour();
     if(targetTour2){
       if(mode)targetTour2.teams=imported;else targetTour2.teams=[...(targetTour2.teams||[]),...imported];
+      targetTour2.teamsUpdatedAt=new Date().toISOString();   // 【2026-10-28】この端末で読み込んだ時刻
       saveActiveTour(targetTour2);
     }
     render();
@@ -946,6 +955,7 @@ function makeTournament(overrides){
     // 試合形式：'team'＝チーム戦 / 'singles'＝シングルス（1人で出る大会）
     // 未設定の大会（過去のデータを含む）は 'team'＝チーム戦として扱う
     matchType:'team',
+    nameMode:'real',   // 【2026-10-29】選手名の登録：'real'＝本名／'nickname'＝モルックネーム（通算の成績に入れない）
     matchRules:[],tourneyRules:[],roundRules:[],
     teams:[],matches:[],
     eventPeriodStart:'',eventPeriodEnd:'',
@@ -3474,12 +3484,20 @@ let _evMeta_=null,_evMetaP_=null;
 function loadEventMeta_(){
   if(_evMeta_)return Promise.resolve(_evMeta_);
   if(_evMetaP_)return _evMetaP_;
-  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name',
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,nm:payload->>nameMode',
       {cache:'no-store',headers:sbHeaders()})
     .then(r=>r.ok?r.json():[])
     .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
     .catch(()=>{_evMetaP_=null;return {};});
   return _evMetaP_;
+}
+/* 【2026-10-29】モルックネームの大会か（通算の成績に入れない大会） */
+function isNicknameEvent_(key){
+  const k=String(key||'');
+  const m=_evMeta_&&_evMeta_[k];
+  if(m&&m.nm)return m.nm==='nickname';
+  const t=(AD.tournaments||[]).find(x=>(x.venueCode?x.venueCode+'_'+x.eventCode:x.eventCode)===k);
+  return !!(t&&t.nameMode==='nickname');
 }
 function isTestEvent_(key){
   const p=String(key||'').split('_');
@@ -3670,9 +3688,9 @@ function psResultsHtml_(){
         <div><div style="font-size:14px;font-weight:800;color:#1a1a1a;">${escSc_(p.member)}</div><div style="font-size:12px;color:#6b7280;margin-top:2px;">${escSc_(p.team_name)}（No.${escSc_(p.team_no)}）</div></div>
         <div style="color:#9ca3af;font-size:18px;">›</div></div>`).join('')+more(list.length);
   }
-  if(!q)return msg('名前かチーム名を入れてください（大会を選ばないときは通算の成績です）');
+  if(!q)return msg('名前かチーム名を入れてください（大会を選ばないときは通算の成績です。モルックネームの大会は入りません）');
   const by={};
-  _ps.persons.forEach(p=>{(by[p.member]=by[p.member]||[]).push(p);});
+  _ps.persons.forEach(p=>{if(isNicknameEvent_(p.event_code))return;(by[p.member]=by[p.member]||[]).push(p);});   // モルックネームの大会は通算に入れない
   const list=Object.keys(by).filter(n=>psHas_(n,q)||by[n].some(p=>psHas_(p.team_name,q))).sort((a,b)=>a.localeCompare(b,'ja'));
   if(!list.length)return msg('選手が見つかりません');
   return `<div style="font-size:12px;color:#6b7280;margin-bottom:6px;">${list.length} 件（通算の成績）</div>`+list.slice(0,LIMIT).map(n=>{
@@ -3745,8 +3763,9 @@ async function openPersonEvents_(){
     /* 「個人名から検索」で全選手の一覧（_ps.persons）をもう持っていれば、それを使う（読み込みなし）。
        持っていないとき（ランキングから来たときなど）だけ、この人のぶんを読む */
     const all=_ps.persons;
-    const mine=all?all.filter(r=>r.member===name)
-                  :(await sbGet_('v_person_event?member=eq.'+enc_(name)+'&select=event_code,team_no,team_name')).filter(r=>!isTestEvent_(r.event_code));
+    const mine=(all?all.filter(r=>r.member===name)
+                  :(await sbGet_('v_person_event?member=eq.'+enc_(name)+'&select=event_code,team_no,team_name')).filter(r=>!isTestEvent_(r.event_code)))
+      .filter(r=>!isNicknameEvent_(r.event_code));   // モルックネームの大会は、別の人かもしれないので出さない
     let mates=[];
     if(all){
       const keys=new Set(mine.map(r=>r.event_code+'|'+r.team_no));
@@ -4816,6 +4835,14 @@ function rAdminTourEdit(){
             <option value="singles" ${isSinglesTour(tour)?'selected':''}>シングルス（1人で出る）</option>
           </select>
         </div>
+        <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🏷 選手名の登録（本名／モルックネーム）</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>モルックネーム</b>は、会社対抗などのエンジョイ大会向けです。<br>・メンバーの欄にモルックネーム（ニックネーム）を登録します。<b>同じチームの中で同じ名前にしないでください</b><br>・個人の成績は<b>この大会の中だけ</b>に出ます。<b>通算の成績・通算ランキングには入りません</b><br>・シングルスは今までどおり（チーム名＝モルックネーム、メンバー①＝本名）で、ここは「本名」のままにします<br>何も選ばなかった大会（過去の大会を含む）は<b>本名</b>として扱われます。</div>
+          <select id="te-name-mode" style="font-size:14px;">
+            <option value="real" ${tour.nameMode==='nickname'?'':'selected'}>本名（通算の成績に入る）</option>
+            <option value="nickname" ${tour.nameMode==='nickname'?'selected':''}>モルックネーム（この大会の中だけ）</option>
+          </select>
+        </div>
       </div>
       <div style="font-size:11px;color:#9ca3af;margin-top:10px;">入力内容は自動で保存されます。「保存して戻る」を押すと全端末に配信されます。</div>
     </div>
@@ -5265,7 +5292,8 @@ function rViewPersonDetail(){
       ${statsHelpBtn_()}
     </div>
     ${statsHelpHtml_()}
-    ${p.eventCode?`<div style="display:flex;gap:6px;margin-bottom:12px;">
+    ${p.eventCode&&isNicknameEvent_(p.eventCode)?`<div style="font-size:12px;color:#6b7280;background:#f3f4f6;border-radius:8px;padding:8px 10px;margin-bottom:12px;line-height:1.6;">この大会はモルックネームの大会なので、通算の成績には入りません。</div>`
+    :p.eventCode?`<div style="display:flex;gap:6px;margin-bottom:12px;">
       ${modeBtn('event','大会ごと')}
       ${modeBtn('cumul','通算')}
     </div>`:`<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">
@@ -5349,7 +5377,8 @@ function rViewRanking(type){
   const rankPersonMode=vs.rankPersonMode||'event';
 
   // モード切り替えタブ（個人のみ）
-  const modeTabs=(type==='person'&&!vs.rankCumulOnly)?`
+  // 【2026-10-29】モルックネームの大会では「通算」のタブを出さない
+  const modeTabs=(type==='person'&&!vs.rankCumulOnly&&!isNicknameEvent_(vs.eventCode))?`
     <div style="display:flex;gap:6px;margin-bottom:12px;">
       <button class="btn ${rankPersonMode==='event'?'btn-gold':'btn-gray'} btn-sm" id="vrpm-event" style="flex:1;">大会ごと</button>
       <button class="btn ${rankPersonMode==='cumul'?'btn-gold':'btn-gray'} btn-sm" id="vrpm-cumul" style="flex:1;">通算</button>
@@ -6297,6 +6326,24 @@ async function publishSettings(tour,opts){
     if(!silent)alert('GitHub Personal Access Tokenが設定されていません。\n管理者設定画面のトップで設定してください。');
     return false;
   }
+  /* 【2026-10-28】スプシの「チーム情報送信」で届いたチーム一覧を、この端末の古い一覧で上書きしないようにする。
+     配信先（Supabase）のほうが新しければ、どちらを使うか聞く（自動の配信では、新しいほうを使う） */
+  try{
+    const f=sbEventFilter(tour.venueCode?tour.venueCode+'_'+tour.eventCode:tour.eventCode);
+    const r1=await fetch(SB_URL+'/rest/v1/event_docs?'+f+'&kind=eq.settings&select=tu:payload->>teamsUpdatedAt&limit=1',{cache:'no-store',headers:sbHeaders()});
+    const tu=r1.ok?((await r1.json())[0]||{}).tu:'';
+    if(tu&&tu>(tour.teamsUpdatedAt||'')){
+      const r2=await fetch(SB_URL+'/rest/v1/event_docs?'+f+'&kind=eq.settings&select=teams:payload->teams&limit=1',{cache:'no-store',headers:sbHeaders()});
+      const rt=r2.ok?decTeams(((await r2.json())[0]||{}).teams||[]):null;
+      if(rt&&rt.length){
+        const when=new Date(tu).toLocaleString('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+        const useRemote=silent?true:confirm('スプレッドシートから新しいチーム一覧（'+rt.length+'チーム・'+when+'）が届いています。\n\nOK → 届いたチーム一覧を使う（おすすめ）\nキャンセル → この端末のチーム一覧（'+(tour.teams||[]).length+'チーム）で上書きする');
+        if(useRemote){tour.teams=rt;tour.teamsUpdatedAt=tu;}
+        else tour.teamsUpdatedAt=new Date().toISOString();
+        saveAdmin(AD);
+      }
+    }
+  }catch(e){console.warn('チーム一覧の確認に失敗',e);}
   const payload={
     venueCode: tour.venueCode||'',
     eventCode: tour.eventCode,
@@ -6306,10 +6353,12 @@ async function publishSettings(tour,opts){
     sheetUrl: tour.sheetUrl||'',
     priority: tour.priority||'tournament',
     matchType: tour.matchType||'team',   // 試合形式（チーム戦／シングルス）も届ける
+    nameMode: tour.nameMode==='nickname'?'nickname':'real',   // 【2026-10-29】選手名の登録（本名／モルックネーム）
     matchRules: tour.matchRules||[],
     tourneyRules: tour.tourneyRules||[],
     roundRules: tour.roundRules||[],
     teams: encTeams(tour.teams||[]),
+    teamsUpdatedAt: tour.teamsUpdatedAt||'',
     eventPeriodStart: tour.eventPeriodStart||'',
     eventPeriodEnd: tour.eventPeriodEnd||'',
     receptionPw: tour.receptionPw||'',
@@ -11292,6 +11341,19 @@ function bind(){
     updateCodeStatus(); // 画面表示時に初期判定
   }
 
+  /* 【2026-10-29】選手名の登録を切り替えるとき、もう結果が入っている大会なら確かめる */
+  const nmSel=document.getElementById('te-name-mode');
+  if(nmSel){
+    nmSel.dataset.prev=nmSel.value;
+    nmSel.onchange=async()=>{
+      const t=S._editingTourId?AD.tournaments.find(x=>x.id===S._editingTourId):null;
+      const key=t&&t.eventCode?(t.venueCode?t.venueCode+'_'+t.eventCode:t.eventCode):'';
+      let has=false;
+      try{if(key)has=(await sbGet_('team_results?event_code=eq.'+enc_(key)+'&select=match_id&limit=1')).length>0;}catch(e){}
+      if(has&&!confirm('この大会には、もう試合の結果が入っています。\n\n選手名の登録を「'+(nmSel.value==='nickname'?'モルックネーム':'本名')+'」に切り替えると、'+(nmSel.value==='nickname'?'この大会の個人成績が通算の成績・通算ランキングから外れます':'この大会の個人成績が通算の成績・通算ランキングに入ります')+'（配信した時点で変わります）。\n\n切り替えますか？')){nmSel.value=nmSel.dataset.prev;return;}
+      nmSel.dataset.prev=nmSel.value;
+    };
+  }
   function captureBasicFields(tour){
     if(!tour)return;
     const ve=document.getElementById('te-venue');if(ve)tour.venueCode=ve.value;
@@ -11309,6 +11371,7 @@ function bind(){
     const rpwEl=document.getElementById('te-reception-pw');if(rpwEl)tour.receptionPw=rpwEl.value.trim();
     const btcEl=document.getElementById('te-bracket-count');if(btcEl)tour.bracketTeamCount=Number(btcEl.value)||64;
     const mtEl=document.getElementById('te-match-type');if(mtEl)tour.matchType=(mtEl.value==='singles'?'singles':'team');
+    const nmEl=document.getElementById('te-name-mode');if(nmEl)tour.nameMode=(nmEl.value==='nickname'?'nickname':'real');
     // 交流戦の参加申請
     const exEn=document.getElementById('te-exh-enabled');
     const exCn=document.getElementById('te-exh-count');
