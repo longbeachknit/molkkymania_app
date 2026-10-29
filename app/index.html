@@ -3541,6 +3541,13 @@ function pastPersonRankHtml_(k,name){
   }
   return `<div style="font-size:12.5px;font-weight:700;color:#9ca3af;white-space:nowrap;flex-shrink:0;">予選敗退</div>`;
 }
+/* 【2026-10-29】過去大会を「個人名で絞り込む」で選手にしぼって開いたとき、その大会でのその選手のチームNo（無ければ ''） */
+function pastPersonTeamNo_(k){
+  const pn=S._pastPersonF||'';
+  if(!pn||!_ps.persons)return '';
+  const r=_ps.persons.find(x=>x.member===pn&&x.event_code===k);
+  return r?String(r.team_no||''):'';
+}
 async function pastPersonsLoad_(){
   if(_ps.persons)return _ps.persons;
   try{
@@ -10826,14 +10833,16 @@ function bind(){
   const bpst=document.getElementById('btn-past-stats');
   if(bpst)bpst.onclick=async()=>{
     const k=S._pastKey||'';
-    _viewState.tab='event';_viewState.eventCode=k;
+    // 【2026-10-29】選手で絞り込んで開いたときは「個人」のタブで、その選手の名前を入れた状態にする
+    const _pn=pastPersonTeamNo_(k)?S._pastPersonF:'';
+    _viewState.tab=_pn?'person':'event';_viewState.eventCode=k;_viewState.searchPerson=_pn||'';
     _viewState.selectedTeam=null;_viewState.selectedPerson=null;
     _viewState.eventStat=null;_viewState.teams=[];_viewState.persons=[];_viewState.cumulData=null;
     _viewState.error='';
     if(!(_viewState.events||[]).includes(k))_viewState.events=[k].concat(_viewState.events||[]);
     S.phase='viewPortal';render();try{window.scrollTo(0,0);}catch(e){}
     fetchViewData('getEvents').then(d=>{if(d&&d.events){_viewState.events=d.events.includes(k)?d.events:[k].concat(d.events);renderIfPhase('viewPortal');}}).catch(()=>{});
-    await loadViewData(k,'event');renderIfPhase('viewPortal');
+    await loadViewData(k,_viewState.tab);renderIfPhase('viewPortal');
   };
 
   const bbkv=document.getElementById('btn-bk-view');
@@ -11068,6 +11077,9 @@ function bind(){
   if(bpsh)bpsh.onclick=()=>{
     _scoreState.loading=false;_scoreState.error='';_scoreState.matchList=null;
     _scoreState.eventCode=S._pastKey||'';_scoreState.teamNo='';
+    // 【2026-10-29】選手で絞り込んで開いたときは、その選手のチームを選んだ状態にする
+    const _ptn=pastPersonTeamNo_(S._pastKey||'');
+    if(_ptn){const _pt=tourByCode(String(S._pastKey||'').split('_')[1]||'');const _hit=_pt&&(_pt.teams||[]).find(x=>parseInt(x.id,10)===parseInt(_ptn,10));_scoreState.teamNo=_hit?String(_hit.id):_ptn;_scoreState.mode='select';}
     S.phase='scoreSearch';render();try{window.scrollTo(0,0);}catch(e){}
   };
 
@@ -12238,7 +12250,8 @@ function bind(){
         // 【8-8】結果反映シート＋アプリの結果から計算（無ければ「予選結果を配信」の内容）。確定の印もここで読む
         await loadPrelimView_();
         // パーソナライズ済みなら自分のチームNoを自動入力して検索結果を表示
-        const myP=getValidMyTeam(eventCode);
+        // 【2026-10-29】過去大会を選手で絞り込んで開いたときは、その選手のチーム
+        const myP=(S._tiReturn==='pastEvent'&&pastPersonTeamNo_(S._pastKey))?{teamId:pastPersonTeamNo_(S._pastKey)}:getValidMyTeam(eventCode);
         if(myP&&myP.teamId){
           const q=String(myP.teamId);
           S._tiPrelimQuery=q;
