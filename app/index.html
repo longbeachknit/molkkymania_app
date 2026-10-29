@@ -3507,6 +3507,31 @@ function pastColor_(k){
   const c=String((m&&m.vcolor)||'').trim();
   return _isColor_(c)?c:'#FFCB3D';
 }
+/* 【2026-10-29】過去大会の「個人名で絞り込む」：選手の候補（個人名から検索と同じ探し方。選手名・チーム名のどちらでも当たる） */
+async function pastPersonsLoad_(){
+  if(_ps.persons)return _ps.persons;
+  try{
+    await loadEventMeta_();
+    const r=await sbGet_('v_person_event?select=member,team_no,team_name,event_code&order=member');
+    _ps.persons=r.filter(x=>!isTestEvent_(x.event_code));
+  }catch(e){console.error('選手の一覧を読めませんでした',e);}
+  return _ps.persons;
+}
+function pastPersonCandHtml_(q){
+  q=String(q||'').trim().toLowerCase();
+  if(!q)return '';
+  if(!_ps.persons)return `<div style="font-size:12px;color:#9ca3af;padding:8px 2px;">読み込み中...</div>`;
+  const by={};
+  _ps.persons.forEach(p=>{if(isNicknameEvent_(p.event_code))return;(by[p.member]=by[p.member]||[]).push(p);});
+  const names=Object.keys(by).filter(n=>psHas_(n,q)||by[n].some(p=>psHas_(p.team_name,q))).sort((a,b)=>a.localeCompare(b,'ja'));
+  if(!names.length)return `<div style="font-size:12px;color:#9ca3af;padding:8px 2px;">選手が見つかりません</div>`;
+  return `<div style="border:1px solid #e5e7eb;border-radius:10px;margin-top:6px;max-height:300px;overflow-y:auto;">`+names.slice(0,30).map(n=>{
+    const rows=by[n],tns=[...new Set(rows.map(r=>r.team_name))];
+    return `<button class="past-f-person-pick" data-name="${escSc_(n)}" style="display:block;width:100%;text-align:left;padding:9px 12px;background:#fff;border:none;border-bottom:1px solid #f3f4f6;cursor:pointer;">
+      <div style="font-size:14px;font-weight:700;color:#111;">${escSc_(n)}</div>
+      <div style="font-size:11.5px;color:#6b7280;">出場 ${new Set(rows.map(r=>r.event_code)).size} 大会　${escSc_(tns.slice(0,3).join(' / '))}${tns.length>3?' ほか':''}</div>
+    </button>`;}).join('')+(names.length>30?`<div style="font-size:11px;color:#9ca3af;padding:6px 12px;">ほか ${names.length-30} 人。もう少し入れて絞り込んでください</div>`:'')+`</div>`;
+}
 function rPastList(){
   const back=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
       <button class="btn btn-gray btn-sm" id="btn-bk-past">← 戻る</button>
@@ -3525,15 +3550,28 @@ function rPastList(){
   const venues=Object.keys(vcode).sort((a,b)=>vcode[a].localeCompare(vcode[b],undefined,{numeric:true}));
   const months=[...new Set(all.map(ym).filter(Boolean))].sort().reverse();
   const years=[...new Set(months.map(x=>x.slice(0,4)))];
-  const keys=all.filter(k=>(!vf||(_evMeta_[k]||{}).vname===vf)&&(!pf||ym(k).indexOf(pf)===0)&&(!cf||(_evMeta_[k]||{}).ccode===cf));
+  /* 【2026-10-29】個人名で絞り込む：選んだ選手が出た大会だけ（モルックネームの大会は外す） */
+  const pn=S._pastPersonF||'';
+  const pEv=pn&&_ps.persons?new Set(_ps.persons.filter(r=>r.member===pn&&!isNicknameEvent_(r.event_code)).map(r=>r.event_code)):null;
+  const keys=all.filter(k=>(!vf||(_evMeta_[k]||{}).vname===vf)&&(!pf||ym(k).indexOf(pf)===0)&&(!cf||(_evMeta_[k]||{}).ccode===cf)&&(!pEv||pEv.has(k)));
   const selS='font-size:13px;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;';
   const filters=`<select id="past-f-cat" style="${selS}width:100%;margin-bottom:8px;"><option value="">カテゴリーで絞り込む</option>${cats.map(c=>`<option value="${escSc_(c)}" ${cf===c?'selected':''}>${escSc_(catName(c))}</option>`).join('')}</select>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
       <select id="past-f-venue" style="${selS}"><option value="">開催地で絞り込む</option>${venues.map(v=>`<option value="${escSc_(v)}" ${vf===v?'selected':''}>${escSc_(v)}</option>`).join('')}</select>
       <select id="past-f-period" style="${selS}"><option value="">開催時期で絞り込む</option>${years.map(y=>`<option value="${y}" ${pf===y?'selected':''}>${y}年（すべて）</option>${months.filter(m=>m.indexOf(y)===0).map(m=>`<option value="${m}" ${pf===m?'selected':''}>　${y}年${parseInt(m.slice(5),10)}月</option>`).join('')}`).join('')}</select>
     </div>`;
+  const personBox=pn
+    ?`<div style="display:flex;align-items:center;gap:8px;background:#f3f4f6;border-radius:10px;padding:8px 12px;margin-bottom:12px;">
+        <div style="flex:1;font-size:13px;color:#111;"><b>${escSc_(pn)}</b> さんが出た大会${pEv?'（'+keys.length+'大会）':''}</div>
+        <button id="past-f-person-clear" style="font-size:12px;font-weight:700;color:#6b7280;background:#fff;border:1px solid #e5e7eb;border-radius:99px;padding:4px 10px;cursor:pointer;">✕ 解除</button>
+      </div>`
+    :`<div style="margin-bottom:12px;">
+        <input type="text" id="past-f-person" value="${escSc_(S._pastPersonQ||'')}" placeholder="個人名で絞り込む（選手名・チーム名）" style="font-size:14px;"/>
+        <div id="past-f-person-list"></div>
+      </div>`;
   return`<div style="padding:8px 0 4px;">${back}
     ${filters}
+    ${personBox}
     ${keys.length?'':'<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px;">この条件の大会はありません</div>'}
     ${keys.map(k=>{const m=_evMeta_[k]||{};return`<button class="past-ev" data-key="${escSc_(k)}" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;background:#fff;border:1.5px solid ${pastColor_(k)};border-left:6px solid ${pastColor_(k)};border-radius:10px;cursor:pointer;">
         <div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(k,true))}${m.vname?'　'+escSc_(m.vname):''}</div>
@@ -12245,6 +12283,16 @@ function bind(){
   // 【2026-10-27】過去大会の結果
   const bgpast=document.getElementById('btn-go-past');
   if(bgpast)bgpast.onclick=()=>{S.phase='pastList';render();loadEventMeta_().then(()=>renderIfPhase('pastList'));};
+  // 【2026-10-29】個人名で絞り込む
+  const pfpi=document.getElementById('past-f-person');
+  if(pfpi){
+    const box=document.getElementById('past-f-person-list');
+    const bindPick=()=>document.querySelectorAll('.past-f-person-pick').forEach(b=>b.onclick=async()=>{S._pastPersonF=b.dataset.name;S._pastPersonQ='';await pastPersonsLoad_();render();try{window.scrollTo(0,0);}catch(e){}});
+    const show=()=>{if(box){box.innerHTML=pastPersonCandHtml_(pfpi.value);bindPick();}};
+    pfpi.oninput=()=>{S._pastPersonQ=pfpi.value;show();if(!_ps.persons&&pfpi.value.trim())pastPersonsLoad_().then(()=>{if(document.getElementById('past-f-person')===pfpi)show();});};
+    if(pfpi.value.trim())show();
+  }
+  const pfpc=document.getElementById('past-f-person-clear');if(pfpc)pfpc.onclick=()=>{S._pastPersonF='';render();};
   const pfc=document.getElementById('past-f-cat');if(pfc)pfc.onchange=()=>{S._pastCatF=pfc.value;render();};
   const pfv=document.getElementById('past-f-venue');if(pfv)pfv.onchange=()=>{S._pastVenueF=pfv.value;render();};
   const pfp=document.getElementById('past-f-period');if(pfp)pfp.onchange=()=>{S._pastPeriodF=pfp.value;render();};
