@@ -10835,7 +10835,9 @@ function bind(){
     const k=S._pastKey||'';
     // 【2026-10-29】選手で絞り込んで開いたときは「個人」のタブで、その選手の名前を入れた状態にする
     const _pn=pastPersonTeamNo_(k)?S._pastPersonF:'';
+    const _prow=_pn&&_ps.persons?_ps.persons.find(x=>x.member===_pn&&x.event_code===k):null;
     _viewState.tab=_pn?'person':'event';_viewState.eventCode=k;_viewState.searchPerson=_pn||'';
+    _viewState.searchTeam=(_prow&&_prow.team_name)||'';   // 「チーム」のタブには、その大会でのチーム名
     _viewState.selectedTeam=null;_viewState.selectedPerson=null;
     _viewState.eventStat=null;_viewState.teams=[];_viewState.persons=[];_viewState.cumulData=null;
     _viewState.error='';
