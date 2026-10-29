@@ -642,6 +642,7 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.priority!==undefined)tour.priority=data.priority;
   // 試合形式。届いていない（古い配信）ときはチーム戦のまま
   if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
+  if(data.categoryCode!==undefined){tour.categoryCode=String(data.categoryCode||'');tour.category=data.category||null;}   // 【2026-10-29】カテゴリー
   tour.nameMode=(String(data.nameMode||'')==='nickname')?'nickname':'real';   // 【2026-10-29】届いていない（古い配信）ときは本名
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
   if(data.tourneyRules!==undefined)tour.tourneyRules=data.tourneyRules;
@@ -911,6 +912,7 @@ function makeTournament(overrides){
   return Object.assign({
     id:'tour_'+Date.now(),
     venueCode:'',eventCode:'',eventName:'',displayName:'',
+    categoryCode:'01',   // 【2026-10-29】カテゴリー（01＝通常大会）
     gasUrl:'',
     sheetUrl:'',
     priority:'tournament',
@@ -1713,6 +1715,35 @@ function saveActiveTour(tour){
   saveAdmin(AD);
 }
 
+/* ===== 【2026-10-29】大会のカテゴリー（通常大会・シングルス・特別大会 など。場所の管理と同じように増やせる） =====
+   一覧は Supabase の category_docs（{code,name,color}）。管理者端末は AD.categories（場所の管理と同じく、こちらを優先）。
+   大会設定には categoryCode と、配信した時点のカテゴリー（category）が入る。 */
+let _catMap_=null,_catMapP_=null;
+function loadCategories_(){
+  if(_catMap_)return Promise.resolve(_catMap_);
+  if(_catMapP_)return _catMapP_;
+  _catMapP_=fetch(SB_URL+'/rest/v1/category_docs?select=code,payload&order=code',{cache:'no-store',headers:sbHeaders()})
+    .then(r=>r.ok?r.json():[]).then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.code)m[r.code]=Object.assign({code:r.code},r.payload||{});});_catMap_=m;_catMapP_=null;try{if(['pastList','pastEvent','viewPersonEvents'].indexOf(S.phase)>=0)render();}catch(e){}return m;})
+    .catch(()=>{_catMapP_=null;return {};});
+  return _catMapP_;
+}
+function categoryOf_(code){
+  const c=String(code||'');if(!c)return null;
+  return ((AD.categories||[]).find(x=>String(x.code)===c))||(_catMap_&&_catMap_[c])||null;
+}
+function categoriesSorted_(){
+  const m={};Object.values(_catMap_||{}).forEach(c=>{m[c.code]=c;});(AD.categories||[]).forEach(c=>{m[c.code]=c;});
+  return Object.values(m).sort((a,b)=>String(a.code).localeCompare(String(b.code),undefined,{numeric:true}));
+}
+const _isColor_=c=>/^#[0-9a-fA-F]{3,8}$/.test(String(c||'').trim());
+/* 大会のテーマカラー：カテゴリーに色があればその色（場所より優先）→ 無ければ場所の色 → 無ければ既定のゴールド */
+function themeColorOf_(tour,fallback){
+  if(!tour)return fallback||'#FFC93D';
+  const c=categoryOf_(tour.categoryCode)||tour.category;
+  if(c&&_isColor_(c.color))return String(c.color).trim();
+  const v=resolveVenue(tour);
+  return (v&&_isColor_(v.themeColor))?v.themeColor:(fallback||'#FFC93D');
+}
 // ===== 会場（場所）情報の解決 =====
 // 参加者側は配信で届いた tour.venue を優先、管理者側は AD.venues から補完する。
 function resolveVenue(tour){
@@ -3259,6 +3290,7 @@ function ensureHtml2canvas_(){
   return _h2cP_;
 }
 function rSetup(){
+  if(!_catMap_&&!_catMapP_)loadCategories_().then(()=>renderIfPhase('setup'));   // 【2026-10-29】カテゴリーの色
   // 「今まさに開催中（配信中）の大会」をAPIで解決してから表示する
   maybeRefreshLiveEvent();
   const _liveCode=S._liveEventCode; // undefined=取得中 / ''=開催なし / コード=開催中
@@ -3282,7 +3314,7 @@ function rSetup(){
   const _venueName=_venue?String((_venue.detail&&_venue.detail.locationName)||_venue.name||'').trim():'';
   const _period=fmtEventPeriod(_liveTour);
   // 大会カードのテーマ色：場所に設定があればその色、無ければ既定のゴールド
-  const _theme=(_venue&&_venue.themeColor)?_venue.themeColor:'#FFC93D';
+  const _theme=themeColorOf_(_liveTour);   // 【2026-10-29】カテゴリーの色 → 場所の色 → ゴールド
   /* 交流戦の参加申請ボタン（★2026-10-05 変更：交流戦ごとに分けた）
      ・大会設定で「申請フォームを作る」にしてあること
      ・対戦表で「交流戦の受付を開始する（番号を選ぶ）」でその番号を開始してあること
@@ -3361,7 +3393,7 @@ function rSetup(){
     /* カードの色は開催中の大会とまったく同じ決め方。
        「場所の管理」でその場所にテーマカラーを設定していればその色、
        設定していなければ既定のゴールド（開催中のカードと同じ）。 */
-    const _upTheme=(_upVenue&&_upVenue.themeColor)?_upVenue.themeColor:'#FFC93D';
+    const _upTheme=themeColorOf_(_upTour);   // 【2026-10-29】カテゴリーの色 → 場所の色 → ゴールド
     const _upRaw=(_upTour.displayName&&_upTour.displayName.trim())?_upTour.displayName:_upTour.eventName;
     const _upNameHtml=escH(_upRaw).replace(/\\n/g,'<br>').replace(/\n/g,'<br>');
     return`<div style="margin-bottom:20px;padding:14px 16px;background:${_upTheme}2E;border:1.5px solid ${_upTheme};border-radius:14px;">
@@ -3388,7 +3420,7 @@ function rSetup(){
          まだ大会の設定が届いていない端末では、裏で読み込んでから描き直す（maybeSyncPickTours_）。 */
     const rv=t?resolveVenue(t):null;
     const vn=escH((rv&&rv.name)||(v&&v.name)||'');
-    const col=(rv&&rv.themeColor)||(v&&v.themeColor)||'#FFC93D';
+    const col=t?themeColorOf_(t,(v&&v.themeColor)||'#FFC93D'):((v&&v.themeColor)||'#FFC93D');   // 【2026-10-29】カテゴリーの色を優先
     return`<button class="live-pick" data-key="${escH(r.event_key)}" style="display:block;width:100%;text-align:left;padding:14px 16px;margin-bottom:10px;background:${col}2E;border:1.5px solid ${col};border-radius:14px;cursor:pointer;">
       <div style="font-size:17px;font-weight:800;color:#1a1a1a;line-height:1.35;">${nm}</div>
       ${vn?`<div style="font-size:13px;color:#6b7280;margin-top:6px;">📍 ${vn}</div>`:''}
@@ -3446,7 +3478,8 @@ let _evMeta_=null,_evMetaP_=null;
 function loadEventMeta_(){
   if(_evMeta_)return Promise.resolve(_evMeta_);
   if(_evMetaP_)return _evMetaP_;
-  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,nm:payload->>nameMode',
+  loadCategories_();   // 【2026-10-29】カテゴリーの色・名前も読んでおく
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,nm:payload->>nameMode',
       {cache:'no-store',headers:sbHeaders()})
     .then(r=>r.ok?r.json():[])
     .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
@@ -3505,8 +3538,10 @@ function pastEventKeys_(){
 /* 【2026-10-29】過去大会の枠の色＝その場所のテーマカラー（場所の管理で決める）。無ければ黄色 */
 function pastColor_(k){
   const m=_evMeta_&&_evMeta_[k];
+  const cat=m&&(categoryOf_(m.ccode)||(m.ccode?{color:m.ccolor}:null));   // 【2026-10-29】カテゴリーの色を優先
+  if(cat&&_isColor_(cat.color))return String(cat.color).trim();
   const c=String((m&&m.vcolor)||'').trim();
-  return /^#[0-9a-fA-F]{3,8}$/.test(c)?c:'#FFCB3D';
+  return _isColor_(c)?c:'#FFCB3D';
 }
 function rPastList(){
   const back=`<div style="display:flex;align-items:center;gap:8px;margin-bottom:14px;">
@@ -3517,16 +3552,19 @@ function rPastList(){
   const all=pastEventKeys_();
   if(!all.length)return`<div style="padding:8px 0 4px;">${back}<div style="text-align:center;padding:32px;color:#9ca3af;">過去の大会はまだありません</div></div>`;
   /* 【2026-10-29】開催地・開催時期で絞り込む */
-  const vf=S._pastVenueF||'',pf=S._pastPeriodF||'';
+  const vf=S._pastVenueF||'',pf=S._pastPeriodF||'',cf=S._pastCatF||'';
+  const catName=c=>{const x=categoryOf_(c);if(x&&x.name)return x.name;const k=all.find(k=>(_evMeta_[k]||{}).ccode===c);return (k&&_evMeta_[k].cname)||c;};
+  const cats=[...new Set(all.map(k=>(_evMeta_[k]||{}).ccode).filter(Boolean))].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));
   const ym=k=>{const t=evStartMs_(k);if(!t)return'';const d=new Date(t);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');};
   // 【2026-10-29】開催地は場所IDの順（01 川崎 → 02 大阪 → …）
   const vcode={};all.forEach(k=>{const n=(_evMeta_[k]||{}).vname,c=String(k).split('_')[0];if(n&&(!(n in vcode)||c<vcode[n]))vcode[n]=c;});
   const venues=Object.keys(vcode).sort((a,b)=>vcode[a].localeCompare(vcode[b],undefined,{numeric:true}));
   const months=[...new Set(all.map(ym).filter(Boolean))].sort().reverse();
   const years=[...new Set(months.map(x=>x.slice(0,4)))];
-  const keys=all.filter(k=>(!vf||(_evMeta_[k]||{}).vname===vf)&&(!pf||ym(k).indexOf(pf)===0));
+  const keys=all.filter(k=>(!vf||(_evMeta_[k]||{}).vname===vf)&&(!pf||ym(k).indexOf(pf)===0)&&(!cf||(_evMeta_[k]||{}).ccode===cf));
   const selS='font-size:13px;padding:8px 10px;border:1.5px solid #e5e7eb;border-radius:8px;background:#fff;';
-  const filters=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+  const filters=`<select id="past-f-cat" style="${selS}width:100%;margin-bottom:8px;"><option value="">カテゴリーで絞り込む</option>${cats.map(c=>`<option value="${escSc_(c)}" ${cf===c?'selected':''}>${escSc_(catName(c))}</option>`).join('')}</select>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
       <select id="past-f-venue" style="${selS}"><option value="">開催地で絞り込む</option>${venues.map(v=>`<option value="${escSc_(v)}" ${vf===v?'selected':''}>${escSc_(v)}</option>`).join('')}</select>
       <select id="past-f-period" style="${selS}"><option value="">開催時期で絞り込む</option>${years.map(y=>`<option value="${y}" ${pf===y?'selected':''}>${y}年（すべて）</option>${months.filter(m=>m.indexOf(y)===0).map(m=>`<option value="${m}" ${pf===m?'selected':''}>　${y}年${parseInt(m.slice(5),10)}月</option>`).join('')}`).join('')}</select>
     </div>`;
@@ -4352,6 +4390,49 @@ function adminTourNameOfKey_(ad,k){
 }
 /* 【2026-10-29】一覧からチェックして選ぶ窓。選んだ key の配列を返す（やめたら null） */
 /* 【2026-10-29】大会規約のテンプレ（この端末に保存。AD.tourRulesTpls=[{id,name,text}]） */
+/* 【2026-10-29】カテゴリーの追加・編集の窓。保存すると、この端末に入れて配信もする */
+function categoryModal_(idx){
+  const list=AD.categories||(AD.categories=[]);
+  const cur=idx!=null?list[idx]:null;
+  const used=list.map(c=>parseInt(c.code,10)).filter(n=>!isNaN(n));
+  const nextCode=String((used.length?Math.max.apply(null,used):0)+1).padStart(2,'0');
+  const ov=document.createElement('div');
+  ov.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:10000;display:flex;align-items:flex-end;justify-content:center;';
+  const col=cur&&_isColor_(cur.color)?cur.color:'';
+  ov.innerHTML=`<div style="background:#fff;width:100%;max-width:520px;border-radius:14px 14px 0 0;padding:16px;">
+    <div style="font-size:16px;font-weight:800;color:#111;margin-bottom:10px;">${cur?'カテゴリーを編集':'カテゴリーを追加'}</div>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">番号</div>
+    <input type="text" id="cm-code" value="${escHtml(cur?cur.code:nextCode)}" placeholder="例: 04" style="font-size:14px;margin-bottom:10px;" ${cur?'disabled':''}/>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">名前</div>
+    <input type="text" id="cm-name" value="${escHtml(cur?cur.name||'':'')}" placeholder="例: 特別大会" style="font-size:14px;margin-bottom:10px;"/>
+    <div style="font-size:12px;color:#6b7280;margin-bottom:3px;">色（決めると、場所の色より優先して大会の色になります）</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
+      <input type="color" id="cm-color" value="${col||'#FFC93D'}" style="width:56px;height:36px;padding:0;border:none;background:none;"/>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;"><input type="checkbox" id="cm-nocolor" ${col?'':'checked'} style="width:18px;height:18px;"/>色なし（場所の色を使う）</label>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px;">
+      <button type="button" data-cm="cancel" class="btn btn-gray" style="flex:1;padding:11px;">やめる</button>
+      <button type="button" data-cm="ok" class="btn btn-green" style="flex:2;padding:11px;">保存して配信する</button>
+    </div></div>`;
+  ov.addEventListener('input',e=>{if(e.target.id==='cm-color'){const n=ov.querySelector('#cm-nocolor');if(n)n.checked=false;}});
+  ov.addEventListener('click',async e=>{
+    if(e.target===ov){ov.remove();return;}
+    const b=e.target.closest('[data-cm]');if(!b)return;
+    if(b.dataset.cm==='cancel'){ov.remove();return;}
+    const code=ov.querySelector('#cm-code').value.trim(),name=ov.querySelector('#cm-name').value.trim();
+    const color=ov.querySelector('#cm-nocolor').checked?'':ov.querySelector('#cm-color').value;
+    if(!code||!name){alert('番号と名前を入れてください');return;}
+    if(!cur&&list.some(c=>String(c.code)===code)){alert('この番号はもう使われています');return;}
+    const c={code,name,color};
+    if(cur)list[idx]=c;else list.push(c);
+    AD.categories=list;saveAdmin(AD);
+    const r=await sbPutRpc_('put_category_doc',{p_code:code,p_payload:c});
+    if(_catMap_)_catMap_[code]=c;
+    ov.remove();render();
+    alert(r.ok?'✅ 保存して配信しました':'⚠️ この端末には保存しましたが、配信できませんでした'+(r.reason==='nokey'?'（配信キーが入っていません）':r.reason==='badkey'?'（配信キーが違います）':'')+'。\n📡 ボタンで、もう一度配信してください。');
+  });
+  document.body.appendChild(ov);
+}
 function rulesTplModal_(){
   const ta=document.getElementById('te-tour-rules');if(!ta)return;
   const draw=()=>{
@@ -4520,6 +4601,27 @@ function rAdminTop(){
           ${v.code?`<button class="btn btn-gray btn-xs admin-refresh-venue" data-code="${v.code}" title="配信された最新の場所情報を取り込みます" style="padding:3px 8px;">⟳</button>`:''}
           <button class="btn btn-gray btn-xs admin-edit-venue" data-idx="${i}" style="padding:3px 8px;">編集</button>
           <button class="btn btn-red-o btn-xs admin-del-venue" data-idx="${i}" style="padding:2px 7px;font-size:11px;">削除</button>
+        </div>`).join('')}
+    </div>
+
+    <!-- 【2026-10-29】カテゴリーの管理（場所の管理と同じ形） -->
+    <div class="card" style="padding:14px;margin-bottom:12px;">
+      <div style="display:flex;align-items:center;margin-bottom:6px;">
+        <div style="flex:1;font-size:14px;font-weight:700;color:#1a1a1a;border-left:3px solid #FFB800;padding-left:7px;">カテゴリーの管理</div>
+        <button class="btn btn-green btn-xs" id="btn-add-category" style="padding:4px 10px;">＋ 追加</button>
+      </div>
+      <div style="font-size:11.5px;color:#6b7280;margin-bottom:8px;line-height:1.6;">大会の種類分けです（場所とは関係ありません）。色を決めたカテゴリーは、場所の色より優先して大会の色になります。</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;padding-bottom:10px;border-bottom:1px dashed #e5e7eb;">
+        <button class="btn btn-green btn-sm" id="btn-cat-import-all" style="padding:9px 6px;">⬇️ すべてのカテゴリーを取り込む</button>
+        <button class="btn btn-gray btn-sm" id="btn-cat-import-pick" style="padding:9px 6px;">カテゴリーを選んで取り込む</button>
+      </div>
+      ${(ad.categories||[]).length===0?'<div style="font-size:13px;color:#9ca3af;">まだ登録がありません（上の「取り込む」で入れられます）</div>':
+        (ad.categories||[]).map((c,i)=>({c,i})).sort((a,b)=>String(a.c.code).localeCompare(String(b.c.code),undefined,{numeric:true})).map(({c,i})=>`<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;">
+          <span title="${_isColor_(c.color)?'色あり':'色なし（場所の色を使う）'}" style="width:14px;height:14px;border-radius:50%;flex-shrink:0;background:${_isColor_(c.color)?c.color:'#fff'};border:1px solid ${_isColor_(c.color)?'rgba(0,0,0,0.2)':'#d1d5db'};"></span>
+          <div style="flex:1;font-size:14px;"><span style="font-weight:600;">${escHtml(c.code)}</span> : ${escHtml(c.name||'')}${_isColor_(c.color)?'':'<span style="font-size:11px;color:#9ca3af;">（色なし）</span>'}</div>
+          <button class="btn btn-gray btn-xs admin-pub-cat" data-idx="${i}" title="このカテゴリーを配信します（他の端末やアプリに届きます）" style="padding:3px 8px;">📡</button>
+          <button class="btn btn-gray btn-xs admin-edit-cat" data-idx="${i}" style="padding:3px 8px;">編集</button>
+          <button class="btn btn-red-o btn-xs admin-del-cat" data-idx="${i}" style="padding:2px 7px;font-size:11px;">削除</button>
         </div>`).join('')}
     </div>
 
@@ -4854,6 +4956,9 @@ function rAdminTourEdit(){
       <div style="display:grid;gap:10px;">
         <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">場所</div>
           <select id="te-venue">${venueOpts||'<option value="">場所を先に登録してください</option>'}</select></div>
+        <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">カテゴリー</div>
+          <select id="te-category"><option value="">（未設定）</option>${categoriesSorted_().map(c=>`<option value="${escHtml(c.code)}" ${String(tour.categoryCode||'')===String(c.code)?'selected':''}>${escHtml(c.code)}: ${escHtml(c.name||'')}${_isColor_(c.color)?'（色あり）':''}</option>`).join('')}</select>
+          <div style="font-size:11px;color:#9ca3af;margin-top:3px;">カテゴリーに色があると、場所の色より優先して大会の色になります</div></div>
         <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">大会コード（試合IDの2番目の項目）</div>
           <input type="text" id="te-code" value="${tour.eventCode}" placeholder="例: 0601"/>
           <div id="te-code-status" style="font-size:12px;margin-top:5px;min-height:16px;"></div></div>
@@ -6422,6 +6527,8 @@ async function publishSettings(tour,opts){
     advanceRules: advanceRulesOf_(tour),   // 【8-8】予選順位による進出先（例：1〜32位→決勝トーナメント）
     systemChart: tour.systemChart||null,
     venue: resolveVenue(tour), // 会場（場所）情報＋詳細を同梱して参加者へ配信
+    categoryCode: tour.categoryCode||'',   // 【2026-10-29】カテゴリー（配信した時点の名前・色も同梱）
+    category: (()=>{const c=categoryOf_(tour.categoryCode);return c?{code:c.code,name:c.name||'',color:c.color||''}:null;})(),
     tourInfo: tour.tourInfo||{rules:'',notes:''}, // 大会の詳細（規約・注意点）を同梱して参加者へ配信
     courtLayout: tour.courtLayout||{grid:'',labelTop:'',labelBottom:'',labelLeft:'',labelRight:'',centerLabel:{text:'',pos:'bottom'}},
     folderName: ((AD.folders||[]).find(f=>String(f.id)===String(tour.folderId||''))||{}).name||'', // フォルダ分類を配信（取り込み先で同名フォルダに振り分け）
@@ -11082,6 +11189,44 @@ function bind(){
   document.querySelectorAll('.admin-del-venue').forEach(btn=>btn.addEventListener('click',()=>{
     if(confirm('この場所を削除しますか？')){AD.venues.splice(parseInt(btn.dataset.idx),1);saveAdmin(AD);render();}
   }));
+  // 【2026-10-29】カテゴリーの管理：追加・編集・配信・削除・取り込み
+  const bac=document.getElementById('btn-add-category');if(bac)bac.onclick=()=>categoryModal_(null);
+  document.querySelectorAll('.admin-edit-cat').forEach(b=>b.onclick=()=>categoryModal_(parseInt(b.dataset.idx,10)));
+  document.querySelectorAll('.admin-pub-cat').forEach(b=>b.onclick=async()=>{
+    const c=(AD.categories||[])[parseInt(b.dataset.idx,10)];if(!c)return;
+    const r=await sbPutRpc_('put_category_doc',{p_code:String(c.code),p_payload:{code:c.code,name:c.name||'',color:c.color||''}});
+    if(r.ok&&_catMap_)_catMap_[c.code]=c;
+    alert(r.ok?'✅ カテゴリー「'+c.name+'」を配信しました':'❌ 配信できませんでした'+(r.reason==='nokey'?'（配信キーが入っていません）':r.reason==='badkey'?'（配信キーが違います）':''));
+  });
+  document.querySelectorAll('.admin-del-cat').forEach(b=>b.onclick=async()=>{
+    const i=parseInt(b.dataset.idx,10),c=(AD.categories||[])[i];if(!c)return;
+    const n=(AD.tournaments||[]).filter(t=>String(t.categoryCode||'')===String(c.code)).length;
+    if(!confirm('カテゴリー「'+c.code+' : '+c.name+'」を削除しますか？'+(n?'\n（この端末の '+n+' 大会がこのカテゴリーです。大会の設定は「未設定」と同じ扱いになります）':'')+'\n\nOK → この端末と配信先の両方から消す'))return;
+    const r=await sbPutRpc_('delete_category_doc',{p_code:String(c.code)});
+    AD.categories.splice(i,1);saveAdmin(AD);if(_catMap_)delete _catMap_[c.code];render();
+    if(!r.ok)alert('この端末からは消しましたが、配信先からは消せませんでした'+(r.reason==='nokey'?'（配信キーが入っていません）':''));
+  });
+  const _impCats=(rows)=>{
+    if(!AD.categories)AD.categories=[];
+    rows.forEach(r=>{const c={code:r.code,name:(r.payload||{}).name||'',color:(r.payload||{}).color||''};const at=AD.categories.findIndex(x=>String(x.code)===String(c.code));if(at>=0)AD.categories[at]=c;else AD.categories.push(c);});
+    saveAdmin(AD);render();alert('✅ '+rows.length+'件のカテゴリーを取り込みました');
+  };
+  const _remoteCats=async()=>await sbGet_('category_docs?select=code,payload&order=code');
+  const bcia=document.getElementById('btn-cat-import-all');
+  if(bcia)bcia.onclick=async()=>{
+    let list=[];try{list=await _remoteCats();}catch(e){alert('❌ カテゴリーの一覧を読めませんでした');return;}
+    if(!list.length){alert('配信済みのカテゴリーがありません');return;}
+    if(!confirm('配信済みのカテゴリー '+list.length+'件を、すべて取り込みますか？\n（もう入っているカテゴリーは、最新の内容に更新されます）'))return;
+    _impCats(list);
+  };
+  const bcip=document.getElementById('btn-cat-import-pick');
+  if(bcip)bcip.onclick=async()=>{
+    let list=[];try{list=await _remoteCats();}catch(e){alert('❌ カテゴリーの一覧を読めませんでした');return;}
+    const have=new Set((AD.categories||[]).map(c=>String(c.code)));
+    const codes=await pickModal_({title:'カテゴリーを選んで取り込む',okLabel:'取り込む',
+      items:list.map(r=>({key:r.code,label:r.code+'：'+((r.payload||{}).name||''),sub:(_isColor_((r.payload||{}).color)?'色あり':'色なし')+(have.has(String(r.code))?'　取り込み済み':''),checked:false}))});
+    if(codes&&codes.length)_impCats(list.filter(r=>codes.indexOf(r.code)>=0));
+  };
   // 【2026-10-29】場所を取り込む：すべて／選んで
   const _impVenues=async(codes,btn)=>{
     const orig=btn.textContent;lockBtnSize_(btn);btn.disabled=true;
@@ -11336,6 +11481,7 @@ function bind(){
   function captureBasicFields(tour){
     if(!tour)return;
     const ve=document.getElementById('te-venue');if(ve)tour.venueCode=ve.value;
+    const cte=document.getElementById('te-category');if(cte)tour.categoryCode=cte.value;
     const co=document.getElementById('te-code');if(co)tour.eventCode=co.value.trim();
     const na=document.getElementById('te-name');if(na)tour.eventName=na.value.trim();
     const dn=document.getElementById('te-display-name');if(dn)tour.displayName=dn.value.replace(/\s+$/,'');
@@ -11409,7 +11555,7 @@ function bind(){
     }
   }
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
-  ['te-venue','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
+  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener('change',()=>{
       const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
@@ -12202,6 +12348,7 @@ function bind(){
   // 【2026-10-27】過去大会の結果
   const bgpast=document.getElementById('btn-go-past');
   if(bgpast)bgpast.onclick=()=>{S.phase='pastList';render();loadEventMeta_().then(()=>renderIfPhase('pastList'));};
+  const pfc=document.getElementById('past-f-cat');if(pfc)pfc.onchange=()=>{S._pastCatF=pfc.value;render();};
   const pfv=document.getElementById('past-f-venue');if(pfv)pfv.onchange=()=>{S._pastVenueF=pfv.value;render();};
   const pfp=document.getElementById('past-f-period');if(pfp)pfp.onchange=()=>{S._pastPeriodF=pfp.value;render();};
   const bbkp=document.getElementById('btn-bk-past');if(bbkp)bbkp.onclick=()=>{S.phase='setup';render();};
