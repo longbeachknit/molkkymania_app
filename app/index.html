@@ -3443,7 +3443,7 @@ function loadEventMeta_(){
   if(_evMeta_)return Promise.resolve(_evMeta_);
   if(_evMetaP_)return _evMetaP_;
   loadCategories_();   // 【2026-10-29】カテゴリーの色・名前も読んでおく
-  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,nm:payload->>nameMode',
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,b1:payload->>bracket1Name,b2:payload->>bracket2Name,nm:payload->>nameMode',
       {cache:'no-store',headers:sbHeaders()})
     .then(r=>r.ok?r.json():[])
     .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
@@ -3508,6 +3508,39 @@ function pastColor_(k){
   return _isColor_(c)?c:'#FFCB3D';
 }
 /* 【2026-10-29】過去大会の「個人名で絞り込む」：選手の候補（個人名から検索と同じ探し方。選手名・チーム名のどちらでも当たる） */
+/* 【2026-10-29】選手で絞り込んだときの、大会カードの右の最終順位。
+   最終順位（standings）は並んだ大会の分をまとめて1回で読み、覚えておく（_pastStandMap_：大会 → 中身／null＝まだ送られていない） */
+const _pastStandMap_={};let _pastStandBusy_=false;
+function pastStandLoad_(keys){
+  const need=(keys||[]).filter(k=>!(k in _pastStandMap_));
+  if(!need.length||_pastStandBusy_)return;
+  _pastStandBusy_=true;
+  fetch(SB_URL+'/rest/v1/event_docs?kind=eq.standings&event_key=in.('+need.map(encodeURIComponent).join(',')+')&select=event_key,payload',{cache:'no-store',headers:sbHeaders()})
+    .then(r=>r.ok?r.json():[]).then(rows=>{need.forEach(k=>{_pastStandMap_[k]=null;});(rows||[]).forEach(r=>{_pastStandMap_[r.event_key]=r.payload||null;});})
+    .catch(()=>{}).then(()=>{_pastStandBusy_=false;renderIfPhase('pastList');});
+}
+function pastPersonRankHtml_(k,name){
+  const st=_pastStandMap_[k];
+  if(st===undefined)return `<div style="font-size:11px;color:#9ca3af;white-space:nowrap;">…</div>`;
+  if(!st)return '';
+  const arr=v=>Array.isArray(v)?v:[];
+  const groups=[arr(st.ranks),arr(st.ranks2),arr(st.ranks3)];
+  if(!groups.some(g=>g.length))return '';
+  const m=_evMeta_[k]||{};
+  const nos=new Set((_ps.persons||[]).filter(r=>r.member===name&&r.event_code===k).map(r=>parseInt(r.team_no,10)));
+  const num=r=>String(r||'').trim().replace(/位$/,'');   // 「2」も「2位」も同じに扱う（「5位タイ」はそのまま）
+  const label=r=>{const t=num(r);return t==='1'?'優勝':t==='2'?'準優勝':/^\d+$/.test(t)?t+'位':String(r||'').trim();};
+  const gname=['',m.b2||'Bトーナメント','Lトーナメント'];
+  for(let i=0;i<groups.length;i++){
+    const hit=groups[i].find(r=>nos.has(parseInt(r.teamNo,10)));
+    if(hit){
+      const t=num(hit.rank);const top=(i===0&&(t==='1'||t==='2'||t==='3'));
+      const col=i===0?(t==='1'?'#B8860B':t==='2'?'#6b7280':t==='3'?'#A0522D':'#1a1a1a'):'#1a1a1a';
+      return `<div style="text-align:right;flex-shrink:0;max-width:40%;">${i?`<div style="font-size:10.5px;color:#6b7280;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escSc_(gname[i])}</div>`:''}<div style="font-size:${top?17:15}px;font-weight:900;color:${col};white-space:nowrap;">${escSc_(label(hit.rank))}</div></div>`;
+    }
+  }
+  return `<div style="font-size:12.5px;font-weight:700;color:#9ca3af;white-space:nowrap;flex-shrink:0;">予選敗退</div>`;
+}
 async function pastPersonsLoad_(){
   if(_ps.persons)return _ps.persons;
   try{
@@ -3560,6 +3593,7 @@ function rPastList(){
       <select id="past-f-venue" style="${selS}"><option value="">開催地で絞り込む</option>${venues.map(v=>`<option value="${escSc_(v)}" ${vf===v?'selected':''}>${escSc_(v)}</option>`).join('')}</select>
       <select id="past-f-period" style="${selS}"><option value="">開催時期で絞り込む</option>${years.map(y=>`<option value="${y}" ${pf===y?'selected':''}>${y}年（すべて）</option>${months.filter(m=>m.indexOf(y)===0).map(m=>`<option value="${m}" ${pf===m?'selected':''}>　${y}年${parseInt(m.slice(5),10)}月</option>`).join('')}`).join('')}</select>
     </div>`;
+  if(pn&&pEv)pastStandLoad_(keys);   // 【2026-10-29】その選手の最終順位を出すため、並んだ大会の最終順位をまとめて読む
   const personBox=pn
     ?`<div style="display:flex;align-items:center;gap:8px;background:#f3f4f6;border-radius:10px;padding:8px 12px;margin-bottom:12px;">
         <div style="flex:1;font-size:13px;color:#111;"><b>${escSc_(pn)}</b> さんが出た大会${pEv?'（'+keys.length+'大会）':''}</div>
@@ -3573,9 +3607,11 @@ function rPastList(){
     ${filters}
     ${personBox}
     ${keys.length?'':'<div style="text-align:center;padding:24px;color:#9ca3af;font-size:13px;">この条件の大会はありません</div>'}
-    ${keys.map(k=>{const m=_evMeta_[k]||{};return`<button class="past-ev" data-key="${escSc_(k)}" style="display:block;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;background:#fff;border:1.5px solid ${pastColor_(k)};border-left:6px solid ${pastColor_(k)};border-radius:10px;cursor:pointer;">
-        <div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(k,true))}${m.vname?'　'+escSc_(m.vname):''}</div>
-        <div style="font-size:15px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-top:2px;">${escSc_(evNameOf_(k))}</div>
+    ${keys.map(k=>{const m=_evMeta_[k]||{};const rk=pn&&pEv?pastPersonRankHtml_(k,pn):'';return`<button class="past-ev" data-key="${escSc_(k)}" style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:12px 14px;margin-bottom:8px;background:#fff;border:1.5px solid ${pastColor_(k)};border-left:6px solid ${pastColor_(k)};border-radius:10px;cursor:pointer;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12px;color:#6b7280;font-weight:700;">${escSc_(evDateJa_(k,true))}${m.vname?'　'+escSc_(m.vname):''}</div>
+          <div style="font-size:15px;font-weight:800;color:#1a1a1a;line-height:1.4;margin-top:2px;">${escSc_(evNameOf_(k))}</div>
+        </div>${rk}
       </button>`;}).join('')}
   </div>`;
 }
