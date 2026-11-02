@@ -113,11 +113,11 @@ const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
 // 「7_10」や「7-10」→「7_10」と表示。読み取れないときは下の値を使います。
-const APP_VERSION_FALLBACK='1_6';
+const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793325525';
+const APP_BUILD='1793603789';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -686,6 +686,7 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   if(data.priority!==undefined)tour.priority=data.priority;
   // 試合形式。届いていない（古い配信）ときはチーム戦のまま
   if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
+  if(data.hasPrelim!==undefined)tour.hasPrelim=(data.hasPrelim!==false);   // 【1-7】予選の有無。届いていない（古い配信）ときは「あり」のまま
   if(data.categoryCode!==undefined){tour.categoryCode=String(data.categoryCode||'');tour.category=data.category||null;}   // 【2026-10-29】カテゴリー
   tour.nameMode=(String(data.nameMode||'')==='nickname')?'nickname':'real';   // 【2026-10-29】届いていない（古い配信）ときは本名
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
@@ -963,6 +964,7 @@ function makeTournament(overrides){
     // 試合形式：'team'＝チーム戦 / 'singles'＝シングルス（1人で出る大会）
     // 未設定の大会（過去のデータを含む）は 'team'＝チーム戦として扱う
     matchType:'team',
+    hasPrelim:true,    // 【1-7】予選の有無：true＝あり／false＝なし（予選に関するボタンを出さない）
     nameMode:'real',   // 【2026-10-29】選手名の登録：'real'＝本名／'nickname'＝モルックネーム（通算の成績に入れない）
     matchRules:[],tourneyRules:[],roundRules:[],
     teams:[],matches:[],
@@ -989,6 +991,8 @@ function makeTournament(overrides){
    大会設定の matchType が 'singles' のときだけシングルス扱いにする。
    未設定（過去の大会データ）は 'team'＝チーム戦。 */
 function isSinglesTour(tour){return !!tour&&String((tour&&tour.matchType)||'team')==='singles';}
+/* 【1-7】予選がある大会か。「なし」と決めた大会だけ false（未設定・過去の大会・設定が読めないときは「あり」） */
+function hasPrelimTour(tour){return !(tour&&tour.hasPrelim===false);}
 function isSinglesActive(){try{return isSinglesTour(activeTour());}catch(e){return false;}}
 /* 【1-5・8-7にそろえた】大会コードから大会を探す。 */
 function tourByCode(code){
@@ -3194,7 +3198,7 @@ function liveMatchBtnsHtml(tour,theme,extra,pos){
       ${b('btn-go-matchid','📷 QRコードで試合開始',true)}
       ${b('btn-go-result-only','📤 試合結果のみを送信',true)}
       <button class="card-btn-opponent" data-evcode="${esc(code)}" style="${st(true)}">🔍 対戦相手・コートを検索</button>
-      ${b('btn-go-prelim','予選成績を確認',true)}
+      ${hasPrelimTour(tour)?b('btn-go-prelim','予選成績を確認',true):''}   <!-- 【1-7】予選なしの大会では出さない -->
       ${liveSchedHtml_(tour,theme)}
       ${b('btn-go-bracket','トーナメント表')}
       <button id="btn-go-court-search" data-evcode="${esc(code)}" style="${st(false)}">送信済みの試合を確認</button>
@@ -3685,7 +3689,7 @@ function rPastEvent(){
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
       ${btn('bracketPick','トーナメント表')}
-      ${btn('prelim','予選成績')}
+      ${hasPrelimTour(tour)?btn('prelim','予選成績'):''}
       <button id="btn-past-sheet" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_pc};border-radius:10px;color:#1a1a1a;cursor:pointer;">スコアシート</button>
       <button id="btn-past-stats" style="padding:12px 6px;font-size:13px;font-weight:700;background:#fff;border:1.5px solid ${_pc};border-radius:10px;color:#1a1a1a;cursor:pointer;">投擲成績</button>
       ${btn('regulation','レギュレーション')}
@@ -5039,6 +5043,14 @@ function rAdminTourEdit(){
           <select id="te-match-type" style="font-size:14px;">
             <option value="team" ${isSinglesTour(tour)?'':'selected'}>チーム戦（2人以上のチームで出る）</option>
             <option value="singles" ${isSinglesTour(tour)?'selected':''}>シングルス（1人で出る）</option>
+          </select>
+        </div>
+        <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">📊 予選の有無</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>なし</b>を選ぶと、参加者のアプリに予選に関するボタン（開催中の大会カードの「予選成績を確認」・過去大会の「予選成績」）が出なくなります。<br>予選が無く、第1試合からトーナメントが始まる大会で使います。</div>
+          <select id="te-has-prelim" style="font-size:14px;">
+            <option value="yes" ${hasPrelimTour(tour)?'selected':''}>あり（予選がある）</option>
+            <option value="no" ${hasPrelimTour(tour)?'':'selected'}>なし（予選が無い）</option>
           </select>
         </div>
         <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
@@ -6499,6 +6511,7 @@ async function publishSettings(tour,opts){
     sheetUrl: tour.sheetUrl||'',
     priority: tour.priority||'tournament',
     matchType: tour.matchType||'team',   // 試合形式（チーム戦／シングルス）も届ける
+    hasPrelim: hasPrelimTour(tour),   // 【1-7】予選の有無（なし＝予選に関するボタンを出さない）
     nameMode: tour.nameMode==='nickname'?'nickname':'real',   // 【2026-10-29】選手名の登録（本名／モルックネーム）
     matchRules: tour.matchRules||[],
     tourneyRules: tour.tourneyRules||[],
@@ -11480,6 +11493,7 @@ function bind(){
     const rpwEl=document.getElementById('te-reception-pw');if(rpwEl)tour.receptionPw=rpwEl.value.trim();
     const btcEl=document.getElementById('te-bracket-count');if(btcEl)tour.bracketTeamCount=Number(btcEl.value)||64;
     const mtEl=document.getElementById('te-match-type');if(mtEl)tour.matchType=(mtEl.value==='singles'?'singles':'team');
+    const hpEl=document.getElementById('te-has-prelim');if(hpEl)tour.hasPrelim=(hpEl.value!=='no');
     const nmEl=document.getElementById('te-name-mode');if(nmEl)tour.nameMode=(nmEl.value==='nickname'?'nickname':'real');
     // 交流戦の参加申請
     const exEn=document.getElementById('te-exh-enabled');
@@ -11539,7 +11553,7 @@ function bind(){
     }
   }
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
-  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
+  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener('change',()=>{
       const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
