@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793605305';
+const APP_BUILD='1793606004';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -1469,19 +1469,8 @@ async function fetchRcpTeams_(tour){
   const t=((await r.json())[0]||{}).teams;
   return Array.isArray(t)?decTeams(t):null;
 }
-// 【1-7】名前の比べ方（全角/半角・空白・大文字小文字のちがいは同じとみなす）
+// 【1-7】名前の比べ方（全角/半角・空白・大文字小文字のちがいは同じとみなす。同じチームの中の重複を見つける用）
 function rcpNameKey_(s){return String(s||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();}
-// 【1-7】ほかのチームに同じ名前のメンバーがいれば「名前 → チーム名」の一覧を返す（警告用）
-function rcpMemberDupes_(names){
-  const tour=activeTour()||{};
-  const myId=String(_rcpState.selectedTeamId||'');
-  const owner={};
-  (tour.teams||[]).forEach(t=>{
-    if(String(t.id)===myId)return;
-    String(t.members||'').split(/[,、]/).map(x=>x.trim()).filter(Boolean).forEach(m=>{const k=rcpNameKey_(m);if(k&&!owner[k])owner[k]=t.name||('No.'+t.id);});
-  });
-  return names.map(n=>String(n||'').trim()).filter(Boolean).filter(n=>owner[rcpNameKey_(n)]).map(n=>({name:n,team:owner[rcpNameKey_(n)]}));
-}
 let _scoreState={eventCode:'',teamNo:'',matchList:[],selectedMatch:null,scoreData:null,loading:false,error:''};
 
 let _viewState={tab:'event',eventCode:'',selectedTeam:null,selectedPerson:null,events:[],teams:[],persons:[],eventStat:null,loading:false,error:'',searchTeam:'',searchPerson:'',personMode:'event',cumulData:null,cumulLoading:false,rankMetric:'',rankType:'team',rankData:[],rankPersonMode:'event'};
@@ -9412,16 +9401,7 @@ function rRcpQ2(){
 }
 
 /* 【1-7】❷ メンバーの登録（受付でメンバー登録をする大会だけ）
-     2〜5人。ほかのチームと同じ名前は警告だけ出す（そのまま進める）。 */
-function rcpMemberWarnHtml_(names){
-  const d=rcpMemberDupes_(names);
-  if(!d.length)return'';
-  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-  return`<div style="font-size:13px;color:#92400e;background:#FFF7ED;border:1px solid #fed7aa;border-radius:8px;padding:10px 12px;margin-bottom:14px;line-height:1.6;">
-    ⚠️ ほかのチームに同じ名前のメンバーがいます。<br>${d.map(x=>`・${esc(x.name)}（${esc(x.team)}）`).join('<br>')}<br>
-    <span style="font-size:12px;">他のチームと重複して登録することはできません。名前を変えて区別できるようにしてください。</span>
-  </div>`;
-}
+     2〜5人。ほかのチームとの重複は調べず、「重複してメンバーとなることはできません」の案内だけを出す。 */
 function rRcpQ2Members_(st,t){
   const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
   const mem=(st.members||[]).concat(['','','','','']).slice(0,5);
@@ -9438,7 +9418,7 @@ function rRcpQ2Members_(st,t){
       <div style="font-size:15px;font-weight:700;color:#1D9E75;margin-bottom:10px;">${t?esc(t.name):'チーム'}<span style="font-size:12px;color:#9ca3af;font-weight:400;margin-left:6px;">No.${t?esc(t.id):'-'}</span></div>
       ${inputs}
     </div>
-    <div id="rcp-mem-warn">${rcpMemberWarnHtml_(mem)}</div>
+    <div style="font-size:13px;color:#374151;background:#F3F4F6;border-radius:8px;padding:10px 12px;margin-bottom:14px;line-height:1.6;">※複数のチームに同一人物が重複してメンバーとなることはできません。</div>
     ${st.memError?`<div style="font-size:13px;color:#b91c1c;background:#FCEBEB;border-radius:8px;padding:10px 12px;margin-bottom:12px;">${esc(st.memError)}</div>`:''}
     ${rcpNextBtn(false)}
   </div>`;
@@ -12124,11 +12104,9 @@ function bind(){
     else if(p==='rcpRental'){S.phase='rcpFinal';}
     render();
   };
-  // 【1-7】メンバーの登録：打つたびに、ほかのチームとの重複の警告を出し直す（描き直さないので入力中の文字は消えない）
+  // 【1-7】メンバーの登録：打った内容を覚えておく（戻る・エラーで描き直しても消えないように）
   document.querySelectorAll('.rcp-mem').forEach(el=>el.addEventListener('input',()=>{
-    const vals=Array.from(document.querySelectorAll('.rcp-mem')).map(x=>x.value.trim());
-    _rcpState.members=vals;
-    const w=document.getElementById('rcp-mem-warn');if(w)w.innerHTML=rcpMemberWarnHtml_(vals);
+    _rcpState.members=Array.from(document.querySelectorAll('.rcp-mem')).map(x=>x.value.trim());
   }));
   // 最終画面：理解チェック
   const brca=document.getElementById('rcp-agree');
