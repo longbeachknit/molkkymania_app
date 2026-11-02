@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793611022';
+const APP_BUILD='1793629087';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -8458,7 +8458,6 @@ function rTournamentInfo(){
           const inR2=String((l.m%2===0?n2.team1:n2.team2)||'').trim()===String(l.name).trim();
           const red=(l.top?mm.win1:mm.win2)||inR2;
           parts.push(seg(x0,e.y,x0+2*COL_W,e.y,red));
-          parts.push(`<text x="${x0+COL_W}" y="${e.y-4}" text-anchor="middle" font-size="8" fill="#9ca3af">不戦勝</text>`);
         }else{
           parts.push(nameText(l.names[0],4,e.y1));
           parts.push(nameText(l.names[1],4,e.y2));
