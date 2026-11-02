@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793603789';
+const APP_BUILD='1793605305';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -687,6 +687,7 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   // 試合形式。届いていない（古い配信）ときはチーム戦のまま
   if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
   if(data.hasPrelim!==undefined)tour.hasPrelim=(data.hasPrelim!==false);   // 【1-7】予選の有無。届いていない（古い配信）ときは「あり」のまま
+  if(data.receptionMembers!==undefined)tour.receptionMembers=(data.receptionMembers===true);   // 【1-7】受付でのメンバー登録。届いていないときは「しない」
   if(data.categoryCode!==undefined){tour.categoryCode=String(data.categoryCode||'');tour.category=data.category||null;}   // 【2026-10-29】カテゴリー
   tour.nameMode=(String(data.nameMode||'')==='nickname')?'nickname':'real';   // 【2026-10-29】届いていない（古い配信）ときは本名
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
@@ -965,6 +966,7 @@ function makeTournament(overrides){
     // 未設定の大会（過去のデータを含む）は 'team'＝チーム戦として扱う
     matchType:'team',
     hasPrelim:true,    // 【1-7】予選の有無：true＝あり／false＝なし（予選に関するボタンを出さない）
+    receptionMembers:false,   // 【1-7】受付でメンバー登録をするか（する＝❷がメンバーの登録画面になる）
     nameMode:'real',   // 【2026-10-29】選手名の登録：'real'＝本名／'nickname'＝モルックネーム（通算の成績に入れない）
     matchRules:[],tourneyRules:[],roundRules:[],
     teams:[],matches:[],
@@ -993,6 +995,8 @@ function makeTournament(overrides){
 function isSinglesTour(tour){return !!tour&&String((tour&&tour.matchType)||'team')==='singles';}
 /* 【1-7】予選がある大会か。「なし」と決めた大会だけ false（未設定・過去の大会・設定が読めないときは「あり」） */
 function hasPrelimTour(tour){return !(tour&&tour.hasPrelim===false);}
+/* 【1-7】受付でメンバー登録をする大会か（シングルスでは使わない） */
+function rcpMembersOn(tour){return !!(tour&&tour.receptionMembers===true)&&!isSinglesTour(tour);}
 function isSinglesActive(){try{return isSinglesTour(activeTour());}catch(e){return false;}}
 /* 【1-5・8-7にそろえた】大会コードから大会を探す。 */
 function tourByCode(code){
@@ -1395,38 +1399,88 @@ const GAS_URL='https://script.google.com/macros/s/AKfycbw-KUyzj888W6RBiIQhHjacHF
 const APP_BASE_URL='https://app.molkky.co.jp/app/';   // 【1-6】ストアアプリの公開アドレス（以前は従来アプリのアドレスのままだった）
 const _viewCache={}; // 成績閲覧用キャッシュ
 
-// ===== 受付データ送信（試合結果と同じPOSTメカニズム） =====
-// type:'reception' で GAS に投げ、status:'ok' を確認できたら完了扱い
+// ===== 受付データ送信 =====
+/* 【1-7】受付は Supabase を正にした（GAS は遅いので、参加者を待たせない）。
+     ① Supabase の submit_reception に送る（届くまで待つ）
+     ② check_reception で、本当に入ったか読み直して確かめる
+     ③ 対戦表スプシ（GAS）へは「投げるだけ」で待たない。届かなかったときは、
+        スプシのメニュー「受付の内容を取り込む」で Supabase から取り込める。 */
+function rcpEventKey_(tour){return (tour&&tour.venueCode?tour.venueCode+'_':'')+String((tour&&tour.eventCode)||'');}
+async function sbRcpRpc_(rpc,args){
+  const res=await fetch(SB_URL+'/rest/v1/rpc/'+rpc,{
+    method:'POST',mode:'cors',cache:'no-store',
+    headers:{...sbHeaders(),'Content-Type':'application/json'},
+    body:JSON.stringify(args)
+  });
+  const text=await res.text();
+  let json=null;try{json=JSON.parse(text);}catch(e){}
+  if(!res.ok)throw new Error((json&&(json.message||json.hint))||('HTTP '+res.status));
+  return json;
+}
 async function submitReception(payload){
   const tour=activeTour()||{};
-  const gasUrl=(tour.gasUrl&&tour.gasUrl.trim())||GAS_URL;
-  const body=new URLSearchParams({data:JSON.stringify({
+  const at=new Date().toISOString();
+  const mem=(Array.isArray(payload.members)&&payload.members.length)?payload.members:null;
+  // ① Supabase（待つ）
+  await sbRcpRpc_('submit_reception',{p_key:SB_SUBMIT_KEY,p_event_key:rcpEventKey_(tour),p_row:{
+    team_no:String(payload.teamNo||''),team_name:payload.teamName||'',
+    q1:payload.q1,q2:payload.q2,q3:payload.q3,q4:payload.q4,
+    members:mem,members_enc:mem?encMembers(mem.join(',')):'',
+    needs_desk:!!payload.needsDesk,is_singles:isSinglesActive(),at:at
+  }});
+  // ② 入ったか確かめる
+  const chk=await checkReception(payload.teamNo);
+  if(!chk.found)throw new Error('受付が保存されたか確認できませんでした。もう一度送信してください。');
+  // ③ スプシ（待たない）
+  sendReceptionToSheet_({
     type:'reception',
     eventCode:tour.eventCode||'',
     teamNo:payload.teamNo,
     teamName:payload.teamName,
-    q1:payload.q1,
-    q2:payload.q2,
-    q3:payload.q3,
-    q4:payload.q4,
+    q1:payload.q1,q2:payload.q2,q3:payload.q3,q4:payload.q4,
+    members:mem||undefined,   // メンバー登録したときだけ。スプシの❷の列に「,」区切りで入る
     needsDesk:payload.needsDesk,
     // シングルス大会なら true。受付シートの列の寄せ方（❶❷が無い分を左へ詰める）が変わる
     isSingles:isSinglesActive(),
-    at:new Date().toISOString()
-  })});
-  const res=await fetch(gasUrl,{method:'POST',mode:'cors',body});
-  const json=await res.json();
-  if(json.status!=='ok')throw new Error(json.message||'送信エラー');
-  return json;
+    at:at
+  });
+  return chk;
 }
-// 受付済みか照会（2台目以降のスキップ判定）。{found,needsDesk}を返す
+// 対戦表スプシへ受付を送る（返事を待たない。画面を閉じても送り切るよう keepalive）
+function sendReceptionToSheet_(d){
+  try{
+    const tour=activeTour()||{};
+    const gasUrl=(tour.gasUrl&&tour.gasUrl.trim())||GAS_URL;
+    fetch(gasUrl,{method:'POST',mode:'no-cors',keepalive:true,body:new URLSearchParams({data:JSON.stringify(d)})}).catch(()=>{});
+  }catch(e){}
+}
+// 受付済みか照会（2台目以降のスキップ判定・送信後の確認）。{found,needsDesk,members}を返す
 async function checkReception(teamNo){
   const tour=activeTour()||{};
-  const gasUrl=(tour.gasUrl&&tour.gasUrl.trim())||GAS_URL;
-  const qs=new URLSearchParams({action:'getReception',eventCode:tour.eventCode||'',teamNo:String(teamNo),t:Date.now()}).toString();
-  const res=await fetch(gasUrl+'?'+qs,{cache:'no-store',mode:'cors'});
-  const json=await res.json();
-  return json; // { found:true/false, needsDesk:true/false }
+  const r=await sbRcpRpc_('check_reception',{p_event_key:rcpEventKey_(tour),p_team_no:String(teamNo)});
+  return {found:!!(r&&r.found),needsDesk:!!(r&&r.needs_desk),members:(r&&Array.isArray(r.members))?r.members:null};
+}
+// 【1-7】Supabase にある、この大会の最新のチーム一覧（受付で「自分のチームがあるか」を確かめる用）。読めなければ null
+async function fetchRcpTeams_(tour){
+  const f=sbEventFilter(rcpEventKey_(tour));
+  if(!f)return null;
+  const r=await fetch(SB_URL+'/rest/v1/event_docs?'+f+'&kind=eq.settings&select=teams:payload->teams&limit=1',{cache:'no-store',headers:sbHeaders()});
+  if(!r.ok)return null;
+  const t=((await r.json())[0]||{}).teams;
+  return Array.isArray(t)?decTeams(t):null;
+}
+// 【1-7】名前の比べ方（全角/半角・空白・大文字小文字のちがいは同じとみなす）
+function rcpNameKey_(s){return String(s||'').normalize('NFKC').replace(/\s+/g,'').toLowerCase();}
+// 【1-7】ほかのチームに同じ名前のメンバーがいれば「名前 → チーム名」の一覧を返す（警告用）
+function rcpMemberDupes_(names){
+  const tour=activeTour()||{};
+  const myId=String(_rcpState.selectedTeamId||'');
+  const owner={};
+  (tour.teams||[]).forEach(t=>{
+    if(String(t.id)===myId)return;
+    String(t.members||'').split(/[,、]/).map(x=>x.trim()).filter(Boolean).forEach(m=>{const k=rcpNameKey_(m);if(k&&!owner[k])owner[k]=t.name||('No.'+t.id);});
+  });
+  return names.map(n=>String(n||'').trim()).filter(Boolean).filter(n=>owner[rcpNameKey_(n)]).map(n=>({name:n,team:owner[rcpNameKey_(n)]}));
 }
 let _scoreState={eventCode:'',teamNo:'',matchList:[],selectedMatch:null,scoreData:null,loading:false,error:''};
 
@@ -1451,10 +1505,12 @@ let _rcpState={
   agreed:false,
   submitting:false,   // GAS送信中
   submitError:'',     // 送信エラー
-  resultStatus:null   // 'done' / 'desk'（送信成功後の本部判定）
+  resultStatus:null,  // 'done' / 'desk'（送信成功後の本部判定）
+  members:null,       // 【1-7】メンバー登録の入力（5枠の配列）。メンバー登録をする大会だけ使う
+  memError:''         // 【1-7】メンバー登録の入力エラー
 };
 function resetReception(){
-  _rcpState={mode:'select',teamNo:'',selectedTeamId:null,pwInput:'',pwError:'',loginError:'',checking:false,alreadyDone:false,alreadyRegistered:false,alreadyNeedsDesk:false,q1:null,q2:null,q3:null,q4:null,agreed:false,submitting:false,submitError:'',resultStatus:null};
+  _rcpState={mode:'select',teamNo:'',selectedTeamId:null,pwInput:'',pwError:'',loginError:'',checking:false,alreadyDone:false,alreadyRegistered:false,alreadyNeedsDesk:false,q1:null,q2:null,q3:null,q4:null,agreed:false,submitting:false,submitError:'',resultStatus:null,members:null,memError:''};
 }
 
 // ===== 受付済みチームのパーソナライズ保持（localStorage） =====
@@ -5037,6 +5093,14 @@ function rAdminTourEdit(){
           <div style="font-size:12px;color:#6b7280;margin-bottom:8px;">大会受付の際に参加者が入力するパスワードです。会場で掲示してください。</div>
           <input type="text" id="te-reception-pw" value="${tour.receptionPw||''}" placeholder="例: 1234" maxlength="4" inputmode="numeric" style="font-size:18px;letter-spacing:4px;text-align:center;"/>
         </div>
+        <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">📝 受付でのメンバー登録</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>する</b>を選ぶと、受付の❷「メンバー変更の確認」が「メンバーの登録」画面に変わり、参加者が2〜5人のメンバーを登録します（ニックネーム可の大会向け）。<br>登録したメンバーは、この大会のチーム一覧に入ります。スプシの「チーム情報送信」から送ることもできます（メンバー欄が空のチームは、登録されたメンバーを残します）。<br>※シングルスの大会では使いません。</div>
+          <select id="te-rcp-members" style="font-size:14px;">
+            <option value="no" ${tour.receptionMembers===true?'':'selected'}>しない（今までどおり、メンバー変更の有無を聞く）</option>
+            <option value="yes" ${tour.receptionMembers===true?'selected':''}>する（受付でメンバーを登録する）</option>
+          </select>
+        </div>
         <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
           <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">👥 試合形式（チーム戦／シングルス）</div>
           <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>シングルス</b>を選ぶと、1人で出る大会向けの表示に切り替わります。<br>・チーム名の欄に<b>モルックネーム</b>、メンバー①の欄に<b>本名のフルネーム</b>を登録してください<br>・「個人投擲成績」「投擲成績」では、中身が同じになるチームの成績を出さず、個人の成績だけを表示します<br>・投げ順の設定画面は「選手の確認」だけになります（並び替え・外すは出ません）<br>・1セットの人数は自動で1人ちょうどになります<br>何も選ばなかった大会（過去の大会を含む）は<b>チーム戦</b>として扱われます。</div>
@@ -6512,6 +6576,7 @@ async function publishSettings(tour,opts){
     priority: tour.priority||'tournament',
     matchType: tour.matchType||'team',   // 試合形式（チーム戦／シングルス）も届ける
     hasPrelim: hasPrelimTour(tour),   // 【1-7】予選の有無（なし＝予選に関するボタンを出さない）
+    receptionMembers: tour.receptionMembers===true,   // 【1-7】受付でメンバー登録をするか（Supabase の submit_reception もこれを見る）
     nameMode: tour.nameMode==='nickname'?'nickname':'real',   // 【2026-10-29】選手名の登録（本名／モルックネーム）
     matchRules: tour.matchRules||[],
     tourneyRules: tour.tourneyRules||[],
@@ -9323,10 +9388,11 @@ function rRcpQ1(){
   </div>`;
 }
 
-// ❷ メンバー変更確認
+// ❷ メンバー変更確認（メンバー登録をする大会では、メンバーの登録画面）
 function rRcpQ2(){
   const st=_rcpState;
   const t=rcpTeam();
+  if(rcpMembersOn(activeTour()))return rRcpQ2Members_(st,t);
   const members=t&&t.members?String(t.members).split(/[,、]/).map(s=>s.trim()).filter(Boolean):[];
   const memberHtml=members.length>0
     ?members.map(m=>`<div style="font-size:14px;color:#111;padding:4px 0;border-bottom:1px solid #f3f4f6;">・${m}</div>`).join('')
@@ -9342,6 +9408,39 @@ function rRcpQ2(){
     ${rcpChoice('q2','none',st.q2,'変更はない','#1D9E75')}
     ${rcpChoice('q2','changed',st.q2,'変更がある','#E24B4A')}
     ${rcpNextBtn(!st.q2)}
+  </div>`;
+}
+
+/* 【1-7】❷ メンバーの登録（受付でメンバー登録をする大会だけ）
+     2〜5人。ほかのチームと同じ名前は警告だけ出す（そのまま進める）。 */
+function rcpMemberWarnHtml_(names){
+  const d=rcpMemberDupes_(names);
+  if(!d.length)return'';
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return`<div style="font-size:13px;color:#92400e;background:#FFF7ED;border:1px solid #fed7aa;border-radius:8px;padding:10px 12px;margin-bottom:14px;line-height:1.6;">
+    ⚠️ ほかのチームに同じ名前のメンバーがいます。<br>${d.map(x=>`・${esc(x.name)}（${esc(x.team)}）`).join('<br>')}<br>
+    <span style="font-size:12px;">他のチームと重複して登録することはできません。名前を変えて区別できるようにしてください。</span>
+  </div>`;
+}
+function rRcpQ2Members_(st,t){
+  const esc=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const mem=(st.members||[]).concat(['','','','','']).slice(0,5);
+  const inputs=mem.map((v,i)=>`<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+      <div style="width:64px;flex-shrink:0;font-size:13px;color:#6b7280;">メンバー${i+1}${i<2?'<span style="color:#b91c1c;">＊</span>':''}</div>
+      <input type="text" class="rcp-mem" data-i="${i}" value="${esc(v)}" placeholder="${i<2?'必須':'任意'}" maxlength="30" style="flex:1;font-size:16px;"/>
+    </div>`).join('');
+  return`<div style="padding:8px 0 4px;">
+    ${rcpHeader('大会受付','rcpQ1')}
+    ${rcpProgress(2)}
+    <div style="font-size:17px;font-weight:700;color:#111;line-height:1.5;margin-bottom:8px;">❷ チームのメンバーを登録してください</div>
+    <div style="font-size:14px;color:#374151;line-height:1.7;margin-bottom:14px;">今日いっしょに出るメンバーの<b>ニックネーム（もしくは本名）</b>を、2〜5人登録してください。</div>
+    <div class="card" style="padding:14px;margin-bottom:12px;">
+      <div style="font-size:15px;font-weight:700;color:#1D9E75;margin-bottom:10px;">${t?esc(t.name):'チーム'}<span style="font-size:12px;color:#9ca3af;font-weight:400;margin-left:6px;">No.${t?esc(t.id):'-'}</span></div>
+      ${inputs}
+    </div>
+    <div id="rcp-mem-warn">${rcpMemberWarnHtml_(mem)}</div>
+    ${st.memError?`<div style="font-size:13px;color:#b91c1c;background:#FCEBEB;border-radius:8px;padding:10px 12px;margin-bottom:12px;">${esc(st.memError)}</div>`:''}
+    ${rcpNextBtn(false)}
   </div>`;
 }
 
@@ -9414,6 +9513,9 @@ function rRcpDone(){
   const st=_rcpState;
   // 本部での詳細確認が必要か：送信成功時のresultStatusを優先（スキップ時はq1-q4がnullのため）
   const needsDesk=st.resultStatus?(st.resultStatus==='desk'):((st.q1==='late')||(st.q2==='changed')||(st.q3==='no')||(st.q4==='want'));
+  // 【1-7】メンバーを登録したときは、登録した名前も出す
+  const regNames=(st.q2==='registered'&&st.members)?st.members.map(s=>String(s||'').trim()).filter(Boolean):[];
+  const regNote=regNames.length?`<div style="font-size:13px;color:#374151;background:#F3F4F6;border-radius:8px;padding:8px 12px;margin:10px auto 0;max-width:340px;line-height:1.6;">登録したメンバー：${regNames.map(s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;')).join('、')}</div>`:'';
   const alreadyNote=st.alreadyDone?`<div style="font-size:13px;color:#0a6e57;background:#E1F5EE;border-radius:8px;padding:8px 12px;margin:0 auto 4px;max-width:340px;">${isSinglesActive()?'この選手は':'このチームは'}既に受付が完了しています。</div>`:'';
   if(needsDesk){
     return`<div style="padding:8px 0 4px;">
@@ -9422,6 +9524,7 @@ function rRcpDone(){
         <div style="font-size:21px;font-weight:800;color:#92400e;margin-bottom:14px;line-height:1.5;">詳細の確認を行いますので、<br>本部にお越しください</div>
         ${alreadyNote}
         <div style="font-size:15px;color:#374151;line-height:1.6;">${t?t.name+'（No.'+t.id+'）':''}</div>
+        ${regNote}
       </div>
       <button class="btn btn-green" id="btn-rcp-home" style="width:100%;padding:15px;font-size:16px;font-weight:700;">ホームに戻る</button>
     </div>`;
@@ -9432,6 +9535,7 @@ function rRcpDone(){
       <div style="font-size:22px;font-weight:800;color:#1D9E75;margin-bottom:10px;">受付が完了しました</div>
       ${alreadyNote}
       <div style="font-size:15px;color:#374151;line-height:1.6;">${t?t.name+'（No.'+t.id+'）':''}<br>受付ありがとうございました。</div>
+      ${regNote}
     </div>
     <button class="btn btn-green" id="btn-rcp-home" style="width:100%;padding:15px;font-size:16px;font-weight:700;">ホームに戻る</button>
   </div>`;
@@ -11494,6 +11598,7 @@ function bind(){
     const btcEl=document.getElementById('te-bracket-count');if(btcEl)tour.bracketTeamCount=Number(btcEl.value)||64;
     const mtEl=document.getElementById('te-match-type');if(mtEl)tour.matchType=(mtEl.value==='singles'?'singles':'team');
     const hpEl=document.getElementById('te-has-prelim');if(hpEl)tour.hasPrelim=(hpEl.value!=='no');
+    const rmEl=document.getElementById('te-rcp-members');if(rmEl)tour.receptionMembers=(rmEl.value==='yes');
     const nmEl=document.getElementById('te-name-mode');if(nmEl)tour.nameMode=(nmEl.value==='nickname'?'nickname':'real');
     // 交流戦の参加申請
     const exEn=document.getElementById('te-exh-enabled');
@@ -11553,7 +11658,7 @@ function bind(){
     }
   }
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
-  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
+  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-rcp-members','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener('change',()=>{
       const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
@@ -11942,11 +12047,20 @@ function bind(){
       _rcpState.selectedTeamId=team.id;
     }
     _rcpState.loginError='';
-    // 受付済みか照会（2台目以降はパスワード・質問をスキップ）
+    // 【1-7】Supabase で「このチームが大会のチーム一覧にあるか」と「受付済みか」を同時に確かめる（GAS は使わない）
     _rcpState.checking=true;render();
-    let already=null;
-    try{ already=await checkReception(team.id); }catch(e){ already=null; }
+    let already=null,fresh=null;
+    [fresh,already]=await Promise.all([
+      fetchRcpTeams_(tour).catch(()=>null),
+      checkReception(team.id).catch(()=>null)
+    ]);
     _rcpState.checking=false;
+    if(fresh){
+      const ft=fresh.find(t=>String(t.id)===String(team.id)||String(parseInt(t.id,10))===String(parseInt(team.id,10)));
+      if(!ft){_rcpState.loginError='このチームは大会のチーム一覧に見つかりませんでした。本部にお越しください。';render();return;}
+      tour.teams=fresh;saveActiveTour(tour);saveAdmin(AD);   // 最新のチーム一覧（登録済みのメンバーも）にそろえる
+      team=ft;_rcpState.selectedTeamId=ft.id;
+    }
     if(already&&already.found){
       _rcpState.alreadyRegistered=true;
       _rcpState.alreadyNeedsDesk=!!already.needsDesk;
@@ -11976,6 +12090,11 @@ function bind(){
       S.phase='setup';render();
       return;
     }
+    // 【1-7】メンバー登録をする大会：今のメンバー（登録済みならそれ）を入力欄に入れておく
+    if(rcpMembersOn(activeTour())&&!_rcpState.members){
+      const t=rcpTeam();
+      _rcpState.members=(t&&t.members?String(t.members).split(/[,、]/).map(s=>s.trim()).filter(Boolean):[]).slice(0,5);
+    }
     // 未受付：1人目として質問へ（シングルスは❶集合・❷メンバー変更が無いので❸から）
     S.phase=isSinglesActive()?'rcpQ3':'rcpQ1';render();
   };
@@ -11988,12 +12107,29 @@ function bind(){
   if(brcn)brcn.onclick=()=>{
     const p=S.phase;
     if(p==='rcpQ1'){if(!_rcpState.q1)return;S.phase='rcpQ2';}
+    else if(p==='rcpQ2'&&rcpMembersOn(activeTour())){
+      // 【1-7】メンバーの登録：2〜5人・同じチームの中で同じ名前は不可（ほかのチームとの重複は警告だけ）
+      const vals=Array.from(document.querySelectorAll('.rcp-mem')).map(el=>el.value.trim());
+      _rcpState.members=vals;
+      const names=vals.filter(Boolean);
+      const seen={};let dup='';
+      names.forEach(n=>{const k=rcpNameKey_(n);if(seen[k])dup=n;seen[k]=true;});
+      if(names.length<2){_rcpState.memError='メンバーを2人以上登録してください。';render();return;}
+      if(dup){_rcpState.memError='「'+dup+'」が2回入っています。同じチームの中で同じ名前は登録できません。';render();return;}
+      _rcpState.memError='';_rcpState.q2='registered';S.phase='rcpQ3';
+    }
     else if(p==='rcpQ2'){if(!_rcpState.q2)return;S.phase='rcpQ3';}
     else if(p==='rcpQ3'){if(!_rcpState.q3)return;S.phase='rcpQ4';}
     else if(p==='rcpQ4'){if(!_rcpState.q4)return;S.phase=_rcpState.q4==='want'?'rcpRental':'rcpFinal';}
     else if(p==='rcpRental'){S.phase='rcpFinal';}
     render();
   };
+  // 【1-7】メンバーの登録：打つたびに、ほかのチームとの重複の警告を出し直す（描き直さないので入力中の文字は消えない）
+  document.querySelectorAll('.rcp-mem').forEach(el=>el.addEventListener('input',()=>{
+    const vals=Array.from(document.querySelectorAll('.rcp-mem')).map(x=>x.value.trim());
+    _rcpState.members=vals;
+    const w=document.getElementById('rcp-mem-warn');if(w)w.innerHTML=rcpMemberWarnHtml_(vals);
+  }));
   // 最終画面：理解チェック
   const brca=document.getElementById('rcp-agree');
   if(brca)brca.onchange=()=>{_rcpState.agreed=brca.checked;render();};
@@ -12006,12 +12142,20 @@ function bind(){
     const needsDesk=(_rcpState.q1==='late')||(_rcpState.q2==='changed')||(_rcpState.q3==='no')||(_rcpState.q4==='want');
     _rcpState.submitting=true;_rcpState.submitError='';render();
     try{
+      const regMembers=(_rcpState.q2==='registered')?(_rcpState.members||[]).map(s=>String(s||'').trim()).filter(Boolean):null;
       await submitReception({
         teamNo:t?t.id:'',
         teamName:t?t.name:'',
         q1:_rcpState.q1,q2:_rcpState.q2,q3:_rcpState.q3,q4:_rcpState.q4,
+        members:regMembers,
         needsDesk:needsDesk
       });
+      // 【1-7】登録したメンバーを、この端末のチーム一覧にもすぐ反映する（試合開始の画面などで使う）
+      if(regMembers&&t){
+        const tour0=activeTour();
+        const tm=tour0&&(tour0.teams||[]).find(x=>String(x.id)===String(t.id));
+        if(tm){tm.members=regMembers.join(',');saveActiveTour(tour0);saveAdmin(AD);}
+      }
       // 送信成功：パーソナライズ保持して完了画面へ
       _rcpState.submitting=false;
       _rcpState.resultStatus=needsDesk?'desk':'done';
