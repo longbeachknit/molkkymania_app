@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793606004';
+const APP_BUILD='1793611022';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -5141,7 +5141,7 @@ function rAdminTourEdit(){
           <input type="text" id="te-bracket1-name" value="${(tour.bracket1Name||'決勝トーナメント').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}" placeholder="決勝トーナメント" style="font-size:14px;"/>
           <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
           <select id="te-bracket-count" style="font-size:14px;">
-            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
+            ${[8,16,24,32,48,64,128].map(n=>`<option value="${n}" ${Number(tour.bracketTeamCount||64)===n?'selected':''}>${n}チーム</option>`).join('')}
           </select>
         </div>
         <div style="background:#f9fafb;border-radius:8px;padding:10px;">
@@ -5151,7 +5151,7 @@ function rAdminTourEdit(){
           <div style="font-size:12px;color:#6b7280;margin:8px 0 3px;">チーム数</div>
           <select id="te-bracket2-count" style="font-size:14px;">
             <option value="0" ${Number(tour.bracket2TeamCount||0)>0?'':'selected'}>なし（トーナメントは1つだけ）</option>
-            ${[8,16,24,32,48,64].map(n=>`<option value="${n}" ${Number(tour.bracket2TeamCount||0)===n?'selected':''}>${n}チーム</option>`).join('')}
+            ${[8,16,24,32,48,64,128].map(n=>`<option value="${n}" ${Number(tour.bracket2TeamCount||0)===n?'selected':''}>${n}チーム</option>`).join('')}
           </select>
         </div>
       </div>
@@ -8346,10 +8346,17 @@ function rTournamentInfo(){
     function roundMatches(r){
       const want=ST.roundSizes[r]||0;
       const src=rawRounds[r];
-      const ms=(src&&Array.isArray(src.matches))?src.matches.slice():[];
+      /* 【1-7】チームがいない枠の書き方（#N/A などのエラー・「不戦勝」「-」など）は空欄にそろえる */
+      const ms=(src&&Array.isArray(src.matches))?src.matches.map(m=>({...m,team1:brSlot_(m&&m.team1),team2:brSlot_(m&&m.team2)})):[];
       while(ms.length<want)ms.push({team1:'',team2:'',win1:false,win2:false});
       ms.length=want;
       return ms;
+    }
+    function brSlot_(v){
+      const s=String(v==null?'':v).trim();
+      if(s===''||s.charAt(0)==='#')return '';
+      if(/^(不戦勝|不戦|なし|bye|-|ー|―|－|0)$/i.test(s))return '';
+      return s;
     }
     const R=[];
     for(let r=0;r<ST.roundSizes.length;r++)R.push(roundMatches(r));
@@ -8378,19 +8385,23 @@ function rTournamentInfo(){
         const r1=R[0]||[];
         for(let m=0;m<(ST.roundSizes[0]||0);m++){
           const p=r1[m]||{team1:'',team2:''};
-          leaves.push({type:'pair', m:m, names:[p.team1||'', p.team2||'']});
+          const a=p.team1||'', b=p.team2||'';
+          /* 【1-7】片方だけが空＝相手がいない（不戦勝）。1行にまとめて、そのまま2回戦へつなぐ
+               （例：108チームで128チームの表を使うとき）。両方空は、まだ決まっていない枠なのでふつうに2行 */
+          if((a===''||b==='')&&a!==b)leaves.push({type:'bye', m:m, name:a||b, top:a!==''});
+          else leaves.push({type:'pair', m:m, names:[a, b]});
         }
       }
 
       // 各リーフのY座標
-      let rows=0; leaves.forEach(l=>{rows+=(l.type==='seed'?1:2);});
+      let rows=0; leaves.forEach(l=>{rows+=(l.type==='pair'?2:1);});
       const svgH=PAD_TOP+rows*ROW_H+PAD_BOTTOM;
       const nRounds=ST.roundSizes.length;
       const svgW=LABEL_W+nRounds*COL_W+CROWN_W;
 
       let yc=PAD_TOP; const LY=[];
       leaves.forEach(l=>{
-        if(l.type==='seed'){ LY.push({el:l,y:yc+ROW_H/2}); yc+=ROW_H; }
+        if(l.type==='seed'||l.type==='bye'){ LY.push({el:l,y:yc+ROW_H/2}); yc+=ROW_H; }
         else{
           const y1=yc+ROW_H/2, y2=yc+ROW_H+ROW_H/2;
           LY.push({el:l,y1:y1,y2:y2,y:(y1+y2)/2}); yc+=2*ROW_H;
@@ -8438,6 +8449,16 @@ function rTournamentInfo(){
         const l=e.el;
         if(l.type==='seed'){
           parts.push(nameText(l.name,4,e.y));
+        }else if(l.type==='bye'){
+          /* 【1-7】不戦勝：チーム名から2回戦の合流点まで1本の線。
+               勝ちの印があるか、2回戦の表にこのチームが入っていれば赤（勝ち上がり）にする */
+          parts.push(nameText(l.name,4,e.y));
+          const mm=(R[0]||[])[l.m]||{};
+          const n2=(R[1]||[])[Math.floor(l.m/2)]||{};
+          const inR2=String((l.m%2===0?n2.team1:n2.team2)||'').trim()===String(l.name).trim();
+          const red=(l.top?mm.win1:mm.win2)||inR2;
+          parts.push(seg(x0,e.y,x0+2*COL_W,e.y,red));
+          parts.push(`<text x="${x0+COL_W}" y="${e.y-4}" text-anchor="middle" font-size="8" fill="#9ca3af">不戦勝</text>`);
         }else{
           parts.push(nameText(l.names[0],4,e.y1));
           parts.push(nameText(l.names[1],4,e.y2));
