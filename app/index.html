@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793892652';
+const APP_BUILD='1793923167';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -3676,6 +3676,20 @@ function rPastList(){
    ranks＝トーナメント①、ranks2＝②（Bトーナメントなど）、ranks3＝③（シングルスで使う）。無い大会は空。
    ②③があるときは、見出しで分けて出す（①②は大会設定の表示名 bracket1Name／bracket2Name、③は「Lトーナメント」。トーナメント表は無い）。
    それぞれ上から10位まで。それより下は「すべて見る」で開く。届いていなければ「準備中」 */
+/* 【2026-11-06】社名（対戦表の「チーム情報送信」で届く）。チーム名と同じとき・「非公表」のときは出さない */
+function teamCompany_(t){
+  const norm=x=>String(x||'').replace(/[\s\u3000]+/g,'');
+  const co=String((t&&t.company)||'').trim();
+  return co&&norm(co)!=='非公表'&&norm(co)!==norm(t&&t.name)?co:'';
+}
+/* トーナメント表はチーム名しか届かないので、名前から探す。同じ名前で社名が違うチームは決められないので出さない */
+function teamCompanyByName_(tour,name){
+  const norm=x=>String(x||'').replace(/[\s\u3000]+/g,'');
+  const k=norm(name);
+  if(!k)return '';
+  const cos=new Set(((tour&&tour.teams)||[]).filter(t=>norm(t.name)===k).map(teamCompany_));
+  return cos.size===1?[...cos][0]:'';
+}
 function pastStandHtml_(teams,tour){
   const st=S._pastStand;
   if(st===undefined)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">読み込み中…</div>`;
@@ -3686,7 +3700,9 @@ function pastStandHtml_(teams,tour){
     {n:3,ranks:arr(st&&st.ranks3),name:(tour&&tour.bracket3Name)||'Lトーナメント'}
   ].filter(g=>g.ranks.length);
   if(!groups.length)return `<div style="font-size:12.5px;color:#9ca3af;margin-top:4px;">準備中</div>`;
-  const nameOf=no=>{const t=(teams||[]).find(x=>parseInt(x.id,10)===parseInt(no,10));return t?t.name:'';};
+  const teamOf=no=>(teams||[]).find(x=>parseInt(x.id,10)===parseInt(no,10));
+  const nameOf=no=>{const t=teamOf(no);return t?t.name:'';};
+  const coOf=no=>{const c=teamCompany_(teamOf(no));return c?`<span style="font-size:11.5px;font-weight:500;color:#6b7280;">（${escSc_(c)}）</span>`:'';};
   const SHOW=10;
   const all=S._pastStandAll||{};
   const col=r=>{const n=parseInt(r,10);return n===1?'#d4a000':n===2?'#94a3b8':n===3?'#b45309':'#1a1a1a';};
@@ -3695,7 +3711,7 @@ function pastStandHtml_(teams,tour){
     return `<div style="margin-top:6px;">${list.map(r=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid #f1f2f4;">
       <span style="min-width:64px;white-space:nowrap;font-size:15px;font-weight:800;color:${col(r.rank)};">${escSc_(/^\d+$/.test(String(r.rank))?r.rank+'位':r.rank)}</span>
       <span style="font-size:12px;color:#6b7280;min-width:52px;">No.${escSc_(r.teamNo)}</span>
-      <span style="font-size:13.5px;font-weight:700;color:#1a1a1a;">${escSc_(nameOf(r.teamNo))}</span>
+      <span style="font-size:13.5px;font-weight:700;color:#1a1a1a;">${escSc_(nameOf(r.teamNo))}${coOf(r.teamNo)}</span>
     </div>`).join('')}</div>
     ${ranks.length>SHOW?`<button class="past-stand-all" data-n="${n}" style="width:100%;margin-top:8px;padding:8px;background:none;border:none;font-size:12.5px;color:#6b7280;cursor:pointer;">${all[n]?'▲ 閉じる':'▼ すべて見る（'+ranks.length+'チーム）'}</button>`:''}`;
   };
@@ -8371,7 +8387,8 @@ function rTournamentInfo(){
 
     function buildVerticalSVG(){
       const ROW_H=22, PAD_TOP=16, PAD_BOTTOM=16;
-      const LABEL_W=140, COL_W=46, CROWN_W=120;
+      const _hasCo=((_tourB&&_tourB.teams)||[]).some(t=>teamCompany_(t));   // 【2026-11-06】社名の行があるときは名前の欄を広げる
+      const LABEL_W=_hasCo?180:140, COL_W=46, CROWN_W=120;
       const BLACK='#111', RED='#dc2626';
 
       /* 最左のリーフを作る。
@@ -8421,6 +8438,12 @@ function rTournamentInfo(){
       function nameText(t,x,y){
         const raw=String(t||'').trim();
         if(raw==='')return '';
+        const co=teamCompanyByName_(_tourB,raw);
+        if(co){   // 【2026-11-06】1行目にチーム名、2行目に（社名）。入らない分は「…」
+          const fit=(s,px)=>brTextW_(s,px)<=NAME_W?s:brFitCut_(s,px,NAME_W-brTextW_('…',px))[0]+'…';
+          return `<text x="${x}" y="${y-5}" dominant-baseline="central" font-size="9" fill="#111">${esc(fit(raw,9))}</text>`
+                +`<text x="${x}" y="${y+5}" dominant-baseline="central" font-size="8" fill="#6b7280">${esc(fit('（'+co+'）',8))}</text>`;
+        }
         if(brTextW_(raw,10)<=NAME_W)
           return `<text x="${x}" y="${y}" dominant-baseline="central" font-size="10" fill="#111">${esc(raw)}</text>`;
         const c1=brFitCut_(raw,9,NAME_W);
@@ -8552,6 +8575,7 @@ function rTournamentInfo(){
       :`<div style="text-align:center;margin-bottom:10px;">
           <div style="font-size:12px;color:#92400e;font-weight:700;">優勝</div>
           <div style="font-size:20px;font-weight:800;color:#b45309;margin-top:2px;min-height:26px;">${champion?esc(champion):'<span style=\"color:#d1d5db;font-size:14px;\">未確定</span>'}</div>
+          ${champion&&teamCompanyByName_(_tourB,champion)?`<div style="font-size:12px;color:#92400e;">（${esc(teamCompanyByName_(_tourB,champion))}）</div>`:''}
           <div style="font-size:11px;color:#9ca3af;margin-top:4px;">${seedNote}</div>
         </div>
         <div style="overflow-x:auto;-webkit-overflow-scrolling:touch;border:1px solid #f3f4f6;border-radius:10px;padding:6px;">
@@ -10231,11 +10255,13 @@ function rCourtSearch(){
           <div style="display:flex;align-items:center;gap:8px;background:#f8fafc;border-radius:8px;padding:10px;margin-bottom:10px;">
             <div style="flex:1;text-align:center;">
               <div style="font-size:14px;font-weight:700;color:${C[0]};">${teamAName}</div>
+              ${teamCompany_(teamAInfo)?`<div style="font-size:11px;color:#6b7280;">（${escSc_(teamCompany_(teamAInfo))}）</div>`:''}
               <div style="font-size:11px;color:#9ca3af;">No.${r.teamA}</div>
             </div>
             <div style="font-size:15px;font-weight:800;color:#9ca3af;">VS</div>
             <div style="flex:1;text-align:center;">
               <div style="font-size:14px;font-weight:700;color:${C[1]};">${teamBName}</div>
+              ${teamCompany_(teamBInfo)?`<div style="font-size:11px;color:#6b7280;">（${escSc_(teamCompany_(teamBInfo))}）</div>`:''}
               <div style="font-size:11px;color:#9ca3af;">No.${r.teamB}</div>
             </div>
           </div>
