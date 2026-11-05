@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793630287';
+const APP_BUILD='1793892652';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -1711,8 +1711,10 @@ async function fetchFromSupabase_(action,p){
       return {teams:r.map(x=>({teamNo:x.team_no,teamName:x.team_name,value:x[m[0]],rank:x[m[1]]})).sort(byRank)};
     }
     const view=action==='getPersonRanking'?'v_person_event?'+evq:'v_person_cumulative?';
-    const r=await sbGet_(view+'select=member,'+m[0]+','+m[1]);
-    return {persons:r.map(x=>({name:x.member,value:x[m[0]],rank:x[m[1]]})).sort(byRank)};
+    // 【2026-11-06】大会のランキングはチームも読む（モルックネームの大会は、同じ名前でもチームが違えば別の人）
+    const tcols=action==='getPersonRanking'?'team_no,team_name,':'';
+    const r=await sbGet_(view+'select=member,'+tcols+m[0]+','+m[1]);
+    return {persons:r.map(x=>({name:x.member,teamNo:x.team_no,teamName:x.team_name,value:x[m[0]],rank:x[m[1]]})).sort(byRank)};
   }
   if(action==='getMatchList'){
     const rows=await sbGet_('team_results?'+evq+'select=match_id,team_no,team_name,result,total_sets,win_sets,loss_sets&order=match_id');
@@ -5408,6 +5410,7 @@ function rViewPortal(){
         <div class="card" style="padding:12px;margin-bottom:8px;cursor:pointer;display:flex;align-items:center;justify-content:space-between;" data-vperson="${vs.persons.indexOf(p)}">
           <div>
             <div style="font-size:14px;font-weight:700;">${p.name}</div>
+            ${vs.persons.filter(x=>x.name===p.name).length>1?`<div style="font-size:12px;color:#9ca3af;">${p.teamName||''}</div>`:''}
           </div>
           <div style="color:#9ca3af;font-size:18px;">›</div>
         </div>`).join('');
@@ -5560,7 +5563,7 @@ function rViewPersonDetail(){
   const swr2=toP(d.secondWinRate);
   const qhr=toP(d.qhRate);
   const fr=toP(d.fRate);
-  const history=_viewState.persons.filter(x=>x.name===p.name);
+  const history=_viewState.persons.filter(x=>x.name===p.name&&String(x.teamNo||'')===String(p.teamNo||''));
 
   const modeBtn=(m,label)=>`<button class="btn ${mode===m?'btn-gold':'btn-gray'} btn-sm" id="vpm-${m}" style="flex:1;">${label}</button>`;
   if(mode==='cumul'&&_viewState.cumulLoading)return`<div style="padding:8px 0 4px;">
@@ -11062,10 +11065,10 @@ function bind(){
       const idx=parseInt(btn.dataset.rankPerson);
       const p=_viewState.rankData[idx];
       if(!p)return;
-      const cacheKey='getPersonDetail'+JSON.stringify({eventCode:_viewState.eventCode,name:p.name});
+      const cacheKey='getPersonDetail'+JSON.stringify({eventCode:_viewState.eventCode,name:p.name,teamNo:p.teamNo});
       delete _viewCache[cacheKey];
       _viewState.loading=true;S.phase='viewPersonDetail';render();
-      const d=await fetchViewData('getPersonDetail',{eventCode:_viewState.eventCode,name:p.name});
+      const d=await fetchViewData('getPersonDetail',{eventCode:_viewState.eventCode,name:p.name,teamNo:p.teamNo});
       _viewState.selectedPerson=d&&d.person?d.person:p;
       _viewState.loading=false;_viewState.cumulData=null;_viewState.personMode='event';
       renderIfPhase('viewPersonDetail');
@@ -11179,10 +11182,10 @@ function bind(){
       const idx=parseInt(btn.dataset.vperson);
       const p=_viewState.persons[idx];
       if(!p)return;
-      const cacheKey='getPersonDetail'+JSON.stringify({eventCode:_viewState.eventCode,name:p.name});
+      const cacheKey='getPersonDetail'+JSON.stringify({eventCode:_viewState.eventCode,name:p.name,teamNo:p.teamNo});
       delete _viewCache[cacheKey];
       _viewState.loading=true;S.phase='viewPersonDetail';render();
-      const d=await fetchViewData('getPersonDetail',{eventCode:_viewState.eventCode,name:p.name});
+      const d=await fetchViewData('getPersonDetail',{eventCode:_viewState.eventCode,name:p.name,teamNo:p.teamNo});
       _viewState.selectedPerson=d&&d.person?d.person:p;
       _viewState.loading=false;_viewState.cumulData=null;_viewState.personMode='event';
       renderIfPhase('viewPersonDetail');
