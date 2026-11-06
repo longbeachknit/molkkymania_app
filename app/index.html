@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793923167';
+const APP_BUILD='1793924008';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -9564,6 +9564,7 @@ function rRcpDone(){
       ${alreadyNote}
       <div style="font-size:15px;color:#374151;line-height:1.6;">${t?t.name+'（No.'+t.id+'）':''}<br>受付ありがとうございました。</div>
       ${regNote}
+      <div style="font-size:15px;font-weight:800;color:#92400e;background:#FFF7D6;border-radius:8px;padding:10px 12px;margin:14px auto 0;max-width:340px;line-height:1.6;">代表者は本部に参加賞を取りに来てください</div>
     </div>
     <button class="btn btn-green" id="btn-rcp-home" style="width:100%;padding:15px;font-size:16px;font-weight:700;">ホームに戻る</button>
   </div>`;
