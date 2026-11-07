@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_7';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1793924008';
+const APP_BUILD='1794015302';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -9924,7 +9924,7 @@ function posAfter_(tour,match,teamNo){
 /* 【1-7】prevs＝それより前の試合（新しい順）。byeCell＝不戦勝交流戦そのものの箱（試合システム図にあれば）。
      ③ 前の試合も不戦勝交流戦なら、その不戦勝の回戦から勝ち上がった先（不戦勝交流戦①→②と続くとき）
      ④ それでも分からなければ、不戦勝交流戦の箱と同じ行にある回戦が1つだけなら、それ（第1試合の不戦勝交流戦①など） */
-function posByeHome_(tour,tn,rd,prevs,teamNo,byeCell){
+function posByeHome_(tour,tn,rd,prevs,teamNo,byeCell,mc){
   const ch=tour.systemChart;
   if(!ch||!ch.columns||!ch.columns.length)return null;
   const cols=scRepairCols(ch.columns);
@@ -9937,8 +9937,14 @@ function posByeHome_(tour,tn,rd,prevs,teamNo,byeCell){
   const prev=prevs&&prevs[0];
   if(prev){
     const pp=prev.matchId.split('_'),pmc=pp[2]||'',ptc=String(prev.tourneyCode||'');
+    /* 【2026-11-07】同じ試合区分のカード＝シートの「不戦勝」の行。前の試合ではなく、いま不戦勝になっている回戦そのもの
+       （前の試合として読むと「勝ち上がった先」が現在地になり、不戦勝交流戦のあとに1つ先の回戦へ飛んでしまう） */
+    if(pmc===mc&&!posIsBye_(tour,ptc)){
+      const sc=posCellOf_(tour,pmc,ptc);
+      if(sc&&!/不戦勝|交流/.test(posColName_(sc.cols[sc.c])))return sc;
+    }
     if(posIsBye_(tour,ptc)){
-      const ph=posByeHome_(tour,posTourneyName_(tour,ptc),posRoundOf_(tour,pmc,ptc),prevs.slice(1),teamNo,posCellOf_(tour,pmc,ptc));
+      const ph=posByeHome_(tour,posTourneyName_(tour,ptc),posRoundOf_(tour,pmc,ptc),prevs.slice(1),teamNo,posCellOf_(tour,pmc,ptc),pmc);
       if(ph&&posResultOf_(prev.matchId,teamNo,tour)){const n=posNextCell_(ph,'win');if(n&&!n.end)return {c:n.c,r:n.r,cols:ph.cols,ch:ph.ch};}
     }else{const a=posAfter_(tour,prev,teamNo);if(a&&!/不戦勝/.test(posColName_(a.cols[a.c])))return a;}
   }
@@ -9964,7 +9970,9 @@ function teamPosition_(tour,teamNo,sched){
   });
   if(!mine.length)return {none:true};
   const mcOf=m=>parseInt(m.matchId.split('_')[2],10)||0;
-  mine.sort((a,b)=>mcOf(b)-mcOf(a));
+  // 同じ試合区分に「不戦勝」の行と不戦勝交流戦があるときは、不戦勝交流戦を先に見る
+  const byeOf=m=>posIsBye_(tour,String(m.tourneyCode||''))?1:0;
+  mine.sort((a,b)=>(mcOf(b)-mcOf(a))||(byeOf(b)-byeOf(a)));
   const m=mine[0];
   const parts=m.matchId.split('_');
   const mc=parts[2]||'',tc=String(m.tourneyCode||'');
@@ -9973,7 +9981,7 @@ function teamPosition_(tour,teamNo,sched){
   const curLabel=(tn&&rd)?((posNorm_(rd).indexOf(posNorm_(tn))===0?'':tn)+posRoundTxt_(rd)):(mn||('試合区分'+mc));
   if(tn&&rd&&posIsBye_(tour,tc)){
     const byeCell=posCellOf_(tour,mc,tc);   // 【1-7】不戦勝交流戦そのものの箱（図にあれば）
-    const home=posByeHome_(tour,tn,rd,mine.slice(1),teamNo,byeCell);
+    const home=posByeHome_(tour,tn,rd,mine.slice(1),teamNo,byeCell,mc);
     if(home){
       /* 【1-7】図の印：結果の前は「不戦勝交流戦の箱」を「いまここ」で囲み、不戦勝になる回戦の箱に「不戦勝」と書く。
            結果のあとは「不戦勝」の文字を残したまま、次の回戦を「いまここ」にする */
