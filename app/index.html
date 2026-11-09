@@ -113,11 +113,11 @@ const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
 // 「7_10」や「7-10」→「7_10」と表示。読み取れないときは下の値を使います。
-const APP_VERSION_FALLBACK='1_7';
+const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1794015302';
+const APP_BUILD='1794207685';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -687,7 +687,9 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
   // 試合形式。届いていない（古い配信）ときはチーム戦のまま
   if(data.matchType!==undefined)tour.matchType=(String(data.matchType)==='singles'?'singles':'team');
   if(data.hasPrelim!==undefined)tour.hasPrelim=(data.hasPrelim!==false);   // 【1-7】予選の有無。届いていない（古い配信）ときは「あり」のまま
-  if(data.receptionMembers!==undefined)tour.receptionMembers=(data.receptionMembers===true);   // 【1-7】受付でのメンバー登録。届いていないときは「しない」
+  if(data.receptionMembers!==undefined)tour.receptionMembers=(data.receptionMembers===true);
+  if(data.privateOnly!==undefined)tour.privateOnly=(data.privateOnly===true);   // 【1-8】限定公開
+  if(data.privatePwHash!==undefined){const _ph=String(data.privatePwHash||'');if(_ph!==(tour.privatePwHash||''))tour.privatePw='';tour.privatePwHash=_ph;}   // 【1-7】受付でのメンバー登録。届いていないときは「しない」
   if(data.categoryCode!==undefined){tour.categoryCode=String(data.categoryCode||'');tour.category=data.category||null;}   // 【2026-10-29】カテゴリー
   tour.nameMode=(String(data.nameMode||'')==='nickname')?'nickname':'real';   // 【2026-10-29】届いていない（古い配信）ときは本名
   if(data.matchRules!==undefined)tour.matchRules=data.matchRules;
@@ -966,6 +968,7 @@ function makeTournament(overrides){
     // 未設定の大会（過去のデータを含む）は 'team'＝チーム戦として扱う
     matchType:'team',
     hasPrelim:true,    // 【1-7】予選の有無：true＝あり／false＝なし（予選に関するボタンを出さない）
+    privateOnly:false,privatePw:'',privatePwHash:'',   // 【1-8】限定公開：する／パスワード（この端末だけ）／配信するハッシュ
     receptionMembers:false,   // 【1-7】受付でメンバー登録をするか（する＝❷がメンバーの登録画面になる）
     nameMode:'real',   // 【2026-10-29】選手名の登録：'real'＝本名／'nickname'＝モルックネーム（通算の成績に入れない）
     matchRules:[],tourneyRules:[],roundRules:[],
@@ -997,6 +1000,41 @@ function isSinglesTour(tour){return !!tour&&String((tour&&tour.matchType)||'team
 function hasPrelimTour(tour){return !(tour&&tour.hasPrelim===false);}
 /* 【1-7】受付でメンバー登録をする大会か（シングルスでは使わない） */
 function rcpMembersOn(tour){return !!(tour&&tour.receptionMembers===true)&&!isSinglesTour(tour);}
+/* 【1-8】限定公開の大会。パスワードを1回通った端末だけが、その大会を見られる（この端末に覚えておく）。
+     パスワードそのものは配信しない。配信するのは「mmpriv:会場_大会:パスワード」の SHA-256（privatePwHash）だけ。
+     ※画面に出さない仕組み。データベースの中身そのものに鍵をかけるものではない */
+const LS_PRIV_UNLOCK='mm_priv_unlocked_v1';
+function privKeyOf_(tour){return (tour&&tour.venueCode?tour.venueCode+'_':'')+String((tour&&tour.eventCode)||'');}
+function privUnlockedKeys_(){try{const a=JSON.parse(localStorage.getItem(LS_PRIV_UNLOCK)||'[]');return Array.isArray(a)?a:[];}catch(e){return [];}}
+function privIsUnlocked_(key){return privUnlockedKeys_().indexOf(String(key||''))>=0;}
+function privUnlock_(key){try{const a=privUnlockedKeys_();if(a.indexOf(key)<0){a.push(key);localStorage.setItem(LS_PRIV_UNLOCK,JSON.stringify(a));}}catch(e){}}
+function privHashOf_(key,pw){return hashPw('mmpriv:'+key+':'+String(pw||'').trim());}
+function isPrivLocked_(tour){return !!(tour&&tour.privateOnly===true&&tour.privatePwHash)&&!privIsUnlocked_(privKeyOf_(tour));}
+/* 一覧（過去大会の結果・成績のプルダウン）に出さない大会：テスト用の大会と、まだパスワードを通っていない限定公開の大会 */
+function evListHidden_(key){
+  if(isTestEvent_(key))return true;
+  const m=_evMeta_&&_evMeta_[key];
+  return !!(m&&String(m.priv)==='true'&&m.ph&&!privIsUnlocked_(key));
+}
+/* ホームの「開催中の大会」カード（パスワードを入れる前） */
+function privLockedCardHtml_(tour,theme,nameHtml,venueName,period){
+  const escH=s=>String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  return`<div style="margin-bottom:20px;padding:14px 16px;background:${theme}2E;border:1.5px solid ${theme};border-radius:14px;">
+    <div style="font-size:11px;color:#8a6d00;font-weight:800;letter-spacing:0.04em;">開催中の大会</div>
+    <div style="font-size:18px;font-weight:800;color:#1a1a1a;line-height:1.35;margin-top:3px;">${nameHtml}</div>
+    ${venueName?`<div style="font-size:13px;color:#6b7280;margin-top:7px;line-height:1.5;">📍 ${escH(venueName)}</div>`:''}
+    ${period?`<div style="font-size:13px;color:#6b7280;margin-top:2px;line-height:1.5;">🗓 ${escH(period)}</div>`:''}
+    <div style="margin-top:12px;padding:12px;background:#fff;border:1px solid ${theme};border-radius:10px;">
+      <div style="font-size:14px;font-weight:800;color:#1a1a1a;">🔒 参加者限定の大会です</div>
+      <div style="font-size:12px;color:#6b7280;margin:4px 0 10px;line-height:1.6;">大会のパスワードを入れると、この大会の受付・対戦表・トーナメント表などが見られます。一度入れれば、この端末ではずっと見られます。</div>
+      <div style="display:flex;gap:8px;">
+        <input type="password" id="priv-pw" placeholder="大会のパスワード" autocomplete="off" style="flex:1;min-width:0;font-size:16px;"/>
+        <button id="btn-priv-unlock" style="flex-shrink:0;padding:10px 16px;font-size:15px;font-weight:800;background:#FFCB3D;color:#2b2100;border:none;border-radius:10px;cursor:pointer;">${S._privBusy?'確認中…':'見る'}</button>
+      </div>
+      ${S._privErr?`<div style="font-size:13px;color:#b91c1c;margin-top:8px;">${escH(S._privErr)}</div>`:''}
+    </div>
+  </div>`;
+}
 function isSinglesActive(){try{return isSinglesTour(activeTour());}catch(e){return false;}}
 /* 【1-5・8-7にそろえた】大会コードから大会を探す。 */
 function tourByCode(code){
@@ -3366,8 +3404,9 @@ function rSetup(){
      受付の状況を確かめられなかったとき（通信が詰まった・GitHubの読み取り
      回数の上限に当たった等）は、ボタンを出さずに「確認できませんでした」と
      出す。終了したはずのボタンが残ってしまうより、こちらのほうが事故が少ない。 */
+  const _locked=!!(_liveTour&&isPrivLocked_(_liveTour));   // 【1-8】限定公開で、まだパスワードを入れていない
   const _exh=exhOf(_liveTour);
-  if(_liveTour&&_exh.enabled)maybeRefreshExhibitionOpen(_liveTour.eventCode);
+  if(_liveTour&&!_locked&&_exh.enabled)maybeRefreshExhibitionOpen(_liveTour.eventCode);
   const _exhOpenList=(_liveTour&&_exh.enabled)
     ? _exh.games.map((g,i)=>({i:i,name:g.name})).filter(x=>exhGameIsOpen_(x.i))
     : [];
@@ -3405,7 +3444,7 @@ function rSetup(){
         <span style="font-size:15px;font-weight:800;">受付<br><span style="font-size:11px;font-weight:700;">（${isSinglesActive()?'選手':'チーム'}登録）</span></span>
       </button>`;
 
-  const _eventCard=`<div style="margin-bottom:20px;padding:14px 16px;background:${_themeBg};border:1.5px solid ${_theme};border-radius:14px;">
+  const _eventCard=_locked?privLockedCardHtml_(_liveTour,_theme,_nameHtml,_venueName,_period):`<div style="margin-bottom:20px;padding:14px 16px;background:${_themeBg};border:1.5px solid ${_theme};border-radius:14px;">
     <div style="display:flex;align-items:stretch;gap:12px;">
       <div style="flex:1;min-width:0;display:flex;flex-direction:column;justify-content:center;">
         <div style="font-size:11px;color:#8a6d00;font-weight:800;letter-spacing:0.04em;">開催中の大会</div>
@@ -3438,6 +3477,7 @@ function rSetup(){
       <div style="font-size:17px;font-weight:800;color:#1a1a1a;line-height:1.35;">${nm}</div>
       ${vn?`<div style="font-size:13px;color:#6b7280;margin-top:6px;">📍 ${vn}</div>`:''}
       ${t&&fmtEventDate_(t)?`<div style="font-size:13px;color:#6b7280;margin-top:2px;">🗓 ${escH(fmtEventDate_(t))}</div>`:''}
+      ${(t&&isPrivLocked_(t))?'<div style="font-size:12px;color:#374151;font-weight:800;margin-top:6px;">🔒 参加者限定（パスワードが必要）</div>':''}
       <div style="font-size:12px;color:#8a6d00;font-weight:800;margin-top:8px;">この大会を見る ▸</div>
     </button>`;
   };
@@ -3493,7 +3533,7 @@ function loadEventMeta_(){
   if(_evMeta_)return Promise.resolve(_evMeta_);
   if(_evMetaP_)return _evMetaP_;
   loadCategories_();   // 【2026-10-29】カテゴリーの色・名前も読んでおく
-  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,b1:payload->>bracket1Name,b2:payload->>bracket2Name,nm:payload->>nameMode',
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,b1:payload->>bracket1Name,b2:payload->>bracket2Name,nm:payload->>nameMode,priv:payload->>privateOnly,ph:payload->>privatePwHash',
       {cache:'no-store',headers:sbHeaders()})
     .then(r=>r.ok?r.json():[])
     .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
@@ -3522,7 +3562,7 @@ function evStartMs_(key){
 }
 /* 新しい大会が上。テスト用の大会は外す */
 function sortEventsNewest_(keys){
-  return (keys||[]).filter(k=>!isTestEvent_(k)).slice().sort((a,b)=>(evStartMs_(b)-evStartMs_(a))||String(b).localeCompare(String(a)));
+  return (keys||[]).filter(k=>!evListHidden_(k)).slice().sort((a,b)=>(evStartMs_(b)-evStartMs_(a))||String(b).localeCompare(String(a)));
 }
 function evDateJa_(key,withDow){
   const t=evStartMs_(key);
@@ -3603,7 +3643,7 @@ async function pastPersonsLoad_(){
   try{
     await loadEventMeta_();
     const r=await sbGet_('v_person_event?select=member,team_no,team_name,event_code&order=member');
-    _ps.persons=r.filter(x=>!isTestEvent_(x.event_code));
+    _ps.persons=r.filter(x=>!evListHidden_(x.event_code));
   }catch(e){console.error('選手の一覧を読めませんでした',e);}
   return _ps.persons;
 }
@@ -3771,11 +3811,11 @@ async function psLoad_(){
     await loadEventMeta_();
     if(_ps.mode==='team'&&!_ps.teams){
       const r=await sbGet_('v_team_event?select=event_code,team_no,team_name,members&order=event_code.desc,team_no');
-      _ps.teams=r.filter(x=>!isTestEvent_(x.event_code));
+      _ps.teams=r.filter(x=>!evListHidden_(x.event_code));
     }
     if(_ps.mode==='person'&&!_ps.persons){
       const r=await sbGet_('v_person_event?select=member,team_no,team_name,event_code&order=member');
-      _ps.persons=r.filter(x=>!isTestEvent_(x.event_code));
+      _ps.persons=r.filter(x=>!evListHidden_(x.event_code));
     }
   }catch(e){console.error('個人投擲成績の読み込みに失敗',e);}
   _ps.loading=false;
@@ -3898,7 +3938,7 @@ async function openPersonEvents_(){
        持っていないとき（ランキングから来たときなど）だけ、この人のぶんを読む */
     const all=_ps.persons;
     const mine=(all?all.filter(r=>r.member===name)
-                  :(await sbGet_('v_person_event?member=eq.'+enc_(name)+'&select=event_code,team_no,team_name')).filter(r=>!isTestEvent_(r.event_code)))
+                  :(await sbGet_('v_person_event?member=eq.'+enc_(name)+'&select=event_code,team_no,team_name')).filter(r=>!evListHidden_(r.event_code)))
       .filter(r=>!isNicknameEvent_(r.event_code));   // モルックネームの大会は、別の人かもしれないので出さない
     let mates=[];
     if(all){
@@ -5107,6 +5147,16 @@ function rAdminTourEdit(){
             <option value="no" ${tour.receptionMembers===true?'':'selected'}>しない（今までどおり、メンバー変更の有無を聞く）</option>
             <option value="yes" ${tour.receptionMembers===true?'selected':''}>する（受付でメンバーを登録する）</option>
           </select>
+        </div>
+        <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
+          <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🔒 限定公開（大会に参加する人だけが見られる）</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>する</b>にしてパスワードを決めると、参加者のアプリでは、パスワードを入れるまで大会名・会場・日付のカードだけが出ます（受付・対戦表などは出ません）。一度パスワードを入れた端末では、ずっと見られます。<br>「過去大会の結果」にも、パスワードを入れた端末にだけ出ます。<br>※パスワードそのものは配信しません。ほかの管理者の端末では空欄に見えますが、配信済みのパスワードは生きています（変えるときだけ入れ直してください）。<br>※画面に出さない仕組みです。データそのものに鍵をかけるものではありません。</div>
+          <select id="te-private" style="font-size:14px;">
+            <option value="no" ${tour.privateOnly===true?'':'selected'}>しない（だれでも見られる）</option>
+            <option value="yes" ${tour.privateOnly===true?'selected':''}>する（パスワードを入れた人だけ）</option>
+          </select>
+          <input type="text" id="te-private-pw" value="${String(tour.privatePw||'').replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}" placeholder="${tour.privatePwHash?'（配信済みのパスワードあり。変えるときだけ入力）':'限定公開のパスワード'}" autocomplete="off" style="margin-top:8px;font-size:15px;"/>
+          ${(tour.privateOnly===true&&!tour.privatePw&&!tour.privatePwHash)?'<div style="font-size:12px;color:#b91c1c;margin-top:4px;">パスワードが空です。パスワードを決めないと限定公開になりません。</div>':''}
         </div>
         <div style="border-top:1px solid #e5e7eb;margin-top:4px;padding-top:12px;">
           <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">👥 試合形式（チーム戦／シングルス）</div>
@@ -6574,6 +6624,10 @@ async function publishSettings(tour,opts){
       }
     }
   }catch(e){console.warn('チーム一覧の確認に失敗',e);}
+  /* 【1-8】限定公開：パスワードは配信せず、ハッシュだけ。この端末にパスワードが無いとき（別の端末で決めた）は、届いているハッシュをそのまま使う */
+  const _privPw=String(tour.privatePw||'').trim();
+  if(tour.privateOnly===true&&_privPw)tour.privatePwHash=await privHashOf_(privKeyOf_(tour),_privPw);
+  const _privHash=tour.privateOnly===true?String(tour.privatePwHash||''):'';
   const payload={
     venueCode: tour.venueCode||'',
     eventCode: tour.eventCode,
@@ -6584,7 +6638,9 @@ async function publishSettings(tour,opts){
     priority: tour.priority||'tournament',
     matchType: tour.matchType||'team',   // 試合形式（チーム戦／シングルス）も届ける
     hasPrelim: hasPrelimTour(tour),   // 【1-7】予選の有無（なし＝予選に関するボタンを出さない）
-    receptionMembers: tour.receptionMembers===true,   // 【1-7】受付でメンバー登録をするか（Supabase の submit_reception もこれを見る）
+    receptionMembers: tour.receptionMembers===true,
+    privateOnly: !!_privHash,   // 【1-8】限定公開（パスワードが決まっているときだけ）
+    privatePwHash: _privHash,   // 【1-7】受付でメンバー登録をするか（Supabase の submit_reception もこれを見る）
     nameMode: tour.nameMode==='nickname'?'nickname':'real',   // 【2026-10-29】選手名の登録（本名／モルックネーム）
     matchRules: tour.matchRules||[],
     tourneyRules: tour.tourneyRules||[],
@@ -11662,6 +11718,8 @@ function bind(){
     const mtEl=document.getElementById('te-match-type');if(mtEl)tour.matchType=(mtEl.value==='singles'?'singles':'team');
     const hpEl=document.getElementById('te-has-prelim');if(hpEl)tour.hasPrelim=(hpEl.value!=='no');
     const rmEl=document.getElementById('te-rcp-members');if(rmEl)tour.receptionMembers=(rmEl.value==='yes');
+    const pvEl=document.getElementById('te-private');if(pvEl)tour.privateOnly=(pvEl.value==='yes');   // 【1-8】限定公開
+    const ppEl=document.getElementById('te-private-pw');if(ppEl&&ppEl.value.trim())tour.privatePw=ppEl.value.trim();
     const nmEl=document.getElementById('te-name-mode');if(nmEl)tour.nameMode=(nmEl.value==='nickname'?'nickname':'real');
     // 交流戦の参加申請
     const exEn=document.getElementById('te-exh-enabled');
@@ -11721,7 +11779,7 @@ function bind(){
     }
   }
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
-  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-rcp-members','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
+  ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-rcp-members','te-private','te-private-pw','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.addEventListener('change',()=>{
       const tour=AD.tournaments.find(t=>t.id===S._editingTourId);if(!tour)return;
@@ -12041,6 +12099,25 @@ function bind(){
     tour.matches.splice(parseInt(btn.dataset.idx),1);saveActiveTour(tour);render();
   }));
 
+  /* 【1-8】限定公開：パスワードを確かめて、合っていればこの端末に覚えておく */
+  const bpu=document.getElementById('btn-priv-unlock');
+  const ppw=document.getElementById('priv-pw');
+  if(ppw)ppw.addEventListener('keydown',ev=>{if(ev.key==='Enter'&&bpu)bpu.click();});
+  if(bpu)bpu.onclick=async()=>{
+    if(S._privBusy)return;
+    const c=S._liveEventCode;
+    const t=(S._liveTourId?(AD.tournaments||[]).find(x=>x.id===S._liveTourId):null)||(AD.tournaments||[]).find(x=>x.eventCode===c);
+    const pw=(ppw?ppw.value:'').trim();
+    if(!t)return;
+    if(!pw){S._privErr='パスワードを入力してください。';render();return;}
+    S._privBusy=true;S._privErr='';render();
+    let ok=false;
+    try{ok=(await privHashOf_(privKeyOf_(t),pw))===t.privatePwHash;}catch(e){}
+    S._privBusy=false;
+    if(ok){privUnlock_(privKeyOf_(t));S._privErr='';}
+    else S._privErr='パスワードが違います。';
+    render();
+  };
   const bgrc=document.getElementById('btn-go-reception');if(bgrc)bgrc.onclick=async()=>{
     // 【体感速度改善】先に受付画面へ遷移し、通信は裏で実行する
     resetReception();S.phase='reception';render();
