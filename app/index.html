@@ -117,7 +117,7 @@ const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1794207685';
+const APP_BUILD='1794208493';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -1025,7 +1025,7 @@ function privLockedCardHtml_(tour,theme,nameHtml,venueName,period){
     ${venueName?`<div style="font-size:13px;color:#6b7280;margin-top:7px;line-height:1.5;">📍 ${escH(venueName)}</div>`:''}
     ${period?`<div style="font-size:13px;color:#6b7280;margin-top:2px;line-height:1.5;">🗓 ${escH(period)}</div>`:''}
     <div style="margin-top:12px;padding:12px;background:#fff;border:1px solid ${theme};border-radius:10px;">
-      <div style="font-size:14px;font-weight:800;color:#1a1a1a;">🔒 参加者限定の大会です</div>
+      <div style="font-size:14px;font-weight:800;color:#1a1a1a;">🔒 限定大会</div>
       <div style="font-size:12px;color:#6b7280;margin:4px 0 10px;line-height:1.6;">大会のパスワードを入れると、この大会の受付・対戦表・トーナメント表などが見られます。一度入れれば、この端末ではずっと見られます。</div>
       <div style="display:flex;gap:8px;">
         <input type="password" id="priv-pw" placeholder="大会のパスワード" autocomplete="off" style="flex:1;min-width:0;font-size:16px;"/>
@@ -3477,7 +3477,7 @@ function rSetup(){
       <div style="font-size:17px;font-weight:800;color:#1a1a1a;line-height:1.35;">${nm}</div>
       ${vn?`<div style="font-size:13px;color:#6b7280;margin-top:6px;">📍 ${vn}</div>`:''}
       ${t&&fmtEventDate_(t)?`<div style="font-size:13px;color:#6b7280;margin-top:2px;">🗓 ${escH(fmtEventDate_(t))}</div>`:''}
-      ${(t&&isPrivLocked_(t))?'<div style="font-size:12px;color:#374151;font-weight:800;margin-top:6px;">🔒 参加者限定（パスワードが必要）</div>':''}
+      ${(t&&isPrivLocked_(t))?'<div style="font-size:12px;color:#374151;font-weight:800;margin-top:6px;">🔒 限定大会</div>':''}
       <div style="font-size:12px;color:#8a6d00;font-weight:800;margin-top:8px;">この大会を見る ▸</div>
     </button>`;
   };
@@ -5150,7 +5150,7 @@ function rAdminTourEdit(){
         </div>
         <div style="border-top:1px solid #e5e7eb;margin-top:12px;padding-top:12px;">
           <div style="font-size:13px;font-weight:600;color:#374151;margin-bottom:6px;">🔒 限定公開（大会に参加する人だけが見られる）</div>
-          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>する</b>にしてパスワードを決めると、参加者のアプリでは、パスワードを入れるまで大会名・会場・日付のカードだけが出ます（受付・対戦表などは出ません）。一度パスワードを入れた端末では、ずっと見られます。<br>「過去大会の結果」にも、パスワードを入れた端末にだけ出ます。<br>※パスワードそのものは配信しません。ほかの管理者の端末では空欄に見えますが、配信済みのパスワードは生きています（変えるときだけ入れ直してください）。<br>※画面に出さない仕組みです。データそのものに鍵をかけるものではありません。</div>
+          <div style="font-size:12px;color:#6b7280;margin-bottom:8px;line-height:1.7;"><b>する</b>にしてパスワードを決めると、参加者のアプリでは、パスワードを入れるまで大会名・会場・日付のカードだけが出ます（受付・対戦表などは出ません）。一度パスワードを入れた端末では、ずっと見られます。<br>「過去大会の結果」にも、パスワードを入れた端末にだけ出ます。<br>※パスワードは、配信キーを入れた管理者の端末どうしで共有されます（参加者のアプリには届きません）。<br>※画面に出さない仕組みです。データそのものに鍵をかけるものではありません。</div>
           <select id="te-private" style="font-size:14px;">
             <option value="no" ${tour.privateOnly===true?'':'selected'}>しない（だれでも見られる）</option>
             <option value="yes" ${tour.privateOnly===true?'selected':''}>する（パスワードを入れた人だけ）</option>
@@ -6694,6 +6694,7 @@ async function publishSettings(tour,opts){
     });
     if(res.ok){
       const sbMsg=await publishSettingsToSb_(tour,payload);   // 【1-6】Supabase にも直接書く
+      await privPwShare_(tour);   // 【1-8】限定公開のパスワードを、ほかの管理者の端末にも共有する
       if(!silent)alert('✅ 配信完了！\n参加者が次回アクセス時に自動で設定が反映されます。'+sbMsg);
       return true;
     } else {
@@ -6767,6 +6768,38 @@ function sbPutMsg_(r,mapOk){
   if(r.reason==='nokey')return '\n⚠️ アプリ（Supabase）へは届いていません。管理画面の「配信の鍵」に配信キーを入れて保存してから、もう一度配信してください。';
   if(r.reason==='badkey')return '\n⚠️ アプリ（Supabase）へは届いていません：配信キーが違います。';
   return '\n⚠️ アプリ（Supabase）へは届いていません（'+r.reason+'）。もう一度配信してください。';
+}
+/* 【1-8】限定公開のパスワードを、管理者どうしで共有する（配信キーを持つ端末だけが読み書きできる置き場所 set_private_pw／get_private_pw）。
+     大会設定（だれでも読める）にはパスワードを入れず、ハッシュだけを配信する。
+     ・配信したとき：限定公開で、この端末にパスワードがあれば書く。限定公開を「しない」にしたら消す
+     ・大会の編集画面を開いたとき：この端末にパスワードが無ければ読みにいく（届いているハッシュと合うときだけ使う）
+     置き場所がまだ無い・配信キーが無いときは、何もしない */
+async function privPwShare_(tour){
+  try{
+    if(!tour||!tour.eventCode)return;
+    const key=privKeyOf_(tour);
+    if(tour.privateOnly===true){const pw=String(tour.privatePw||'').trim();if(pw)await sbPutRpc_('set_private_pw',{p_event_key:key,p_pw:pw});}
+    else await sbPutRpc_('set_private_pw',{p_event_key:key,p_pw:''});
+  }catch(e){}
+}
+const _privPwTried_={};
+async function privPwFetch_(tour){
+  try{
+    if(!tour||tour.privateOnly!==true||tour.privatePw||!tour.privatePwHash)return;
+    const sk=String(AD.sbSyncKey||'').trim();if(!sk)return;
+    const key=privKeyOf_(tour);
+    if(_privPwTried_[key+'|'+tour.privatePwHash])return;
+    _privPwTried_[key+'|'+tour.privatePwHash]=1;
+    const res=await fetch(SB_URL+'/rest/v1/rpc/get_private_pw',{method:'POST',cache:'no-store',
+      headers:{'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON,'Content-Type':'application/json'},
+      body:JSON.stringify({p_key:sk,p_event_key:key})});
+    if(!res.ok)return;
+    const pw=await res.json();
+    if(typeof pw!=='string'||!pw)return;
+    if((await privHashOf_(key,pw))!==tour.privatePwHash)return;   // 古いパスワードは使わない
+    tour.privatePw=pw;saveActiveTour(tour);saveAdmin(AD);
+    const el=document.getElementById('te-private-pw');if(el&&!el.value)el.value=pw;
+  }catch(e){}
 }
 async function publishSettingsToSb_(tour,payload){
   const p=JSON.parse(JSON.stringify(payload));
@@ -11778,6 +11811,8 @@ function bind(){
       tour.systemChart=(ch&&((ch.columns&&ch.columns.length)||(ch.prelims&&ch.prelims.length)||ch.cornerLabel))?ch:null;
     }
   }
+  // 【1-8】限定公開のパスワードを、ほかの管理者が配信したぶんも読んで欄に入れる
+  if(document.getElementById('te-private-pw')){const _pt=AD.tournaments.find(t=>t.id===S._editingTourId);if(_pt)privPwFetch_(_pt);}
   // 各入力欄を自動保存（途中で他操作をしても入力が消えないように）
   ['te-venue','te-category','te-code','te-name','te-gasurl','te-sheeturl','te-tour-rules','te-tour-notes','te-period-start','te-period-end','te-reception-pw','te-rcp-members','te-private','te-private-pw','te-match-type','te-has-prelim','te-name-mode','te-bracket-count','te-bracket1-name','te-bracket2-count','te-bracket2-name','te-exh-enabled','cl-grid','cl-top','cl-bottom','cl-left','cl-right','cl-center-text','cl-center-pos'].forEach(id=>{
     const el=document.getElementById(id);
