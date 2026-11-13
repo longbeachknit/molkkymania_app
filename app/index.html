@@ -109,6 +109,9 @@ const LB=['#E3F4FD','#FFF6D9'];
 const LBR=['#9BD9F0','#F5D77A'];
 const LT=['#0B5E7D','#7A5B00'];
 const MAX=50,RST=25,MM=3,TURN_LIMIT=12;
+/* 【1-8】ターン制限は12ターンか10ターン。ルールの turnLimit：false＝なし／true・12＝12ターン（前からの大会はtrue）／10＝10ターン */
+function tlTurns_(v){return (v===10||v==='10')?10:(v?TURN_LIMIT:0);}
+function curTL_(){return tlTurns_(S.turnLimit);}
 
 // ===== アプリのバージョン表記 =====
 // ファイル名（例: molkky_final_7_10.html）から自動でバージョン番号を取り出します。
@@ -117,7 +120,7 @@ const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1794533331';
+const APP_BUILD='1794534068';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -386,6 +389,7 @@ function processTurnLimitSetEnd(isExtended){
     else{cset.wid=sc0>sc1?0:sc1>sc0?1:null;}
   }
   cset.endType=isExtended?'tlExtend':'tl'; // 呼び出し元から明示的に渡す
+  cset.tlN=curTL_();cset.endTurn=cset.teams[cset.ftid].throws.length;   // 【1-8】何ターン制限か・何ターン目で終わったか
   S.tlTieExtend=false;S.phase='setOver';render();
 }
 
@@ -2167,8 +2171,9 @@ function buildTeamRows(){
         // 勝利チームのみ記入
         if(s.wid!==ti)return'';
         // ターン制限終了（点数勝負）
-        if(s.endType==='tl')return 12;
-        if(s.endType==='tlExtend')return 13;
+        // 【1-8】10ターン制限なら10。延長は実際に終わったターン（1回の延長なら 11／13）
+        if(s.endType==='tl')return s.tlN||TURN_LIMIT;
+        if(s.endType==='tlExtend')return s.endTurn||((s.tlN||TURN_LIMIT)+1);
         // 通常終了：勝利チームのthrowsからcumul===50になったインデックスを探す
         const throws=s.teams[ti].throws;
         const idx=throws.findIndex(th=>th.cumul>=50);
@@ -4111,11 +4116,11 @@ function rGame(){
   const nextIsFirst=ct===fti;
   const displayTurnNum=nextIsFirst?ftiThrows+1:ftiThrows;
   const completedT=Math.min(cset.teams[0].throws.length,cset.teams[1].throws.length);
-  const remaining=S.turnLimit?(TURN_LIMIT-completedT):null;
+  const remaining=S.turnLimit?(curTL_()-completedT):null;
   return`<div style="padding:6px 0 4px;">
     <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px;flex-wrap:wrap;">
       <span style="font-size:12px;padding:3px 8px;border-radius:99px;background:#f3f4f6;color:#6b7280;font-weight:600;">${fl()}</span>
-      ${S.turnLimit?`<span style="font-size:12px;padding:3px 8px;border-radius:99px;background:#FEF9C3;color:#854d0e;font-weight:600;">⏱ ${TURN_LIMIT}T制限</span>`:''}
+      ${S.turnLimit?`<span style="font-size:12px;padding:3px 8px;border-radius:99px;background:#FEF9C3;color:#854d0e;font-weight:600;">⏱ ${curTL_()}T制限</span>`:''}
       <span style="font-size:15px;font-weight:700;color:#111;">${sl}</span>
       ${S.fmt!=='round2'?`<div style="display:flex;gap:4px;">${[0,1].map(i=>`<span style="font-size:12px;padding:3px 8px;border-radius:99px;background:${wins[i]>0?LB[i]:'#f3f4f6'};color:${wins[i]>0?LT[i]:'#6b7280'};">${S.teams[i].name} ${wins[i]}勝</span>`).join('')}</div>`:''}
       <div style="display:flex;gap:4px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end;">
@@ -4127,9 +4132,9 @@ function rGame(){
     </div>
     ${S.endPending?`<div style="background:#FFF7ED;border:1.5px solid #fed7aa;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#92400e;">⏳ <strong>後攻の投擲が終わり次第、試合を終了します</strong></div>`:''}
     ${S.tieExtend?`<div style="background:#F4F7E8;border:1.5px solid #C5D89B;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#4a5d16;">🔁 <strong>合計点が同点のためもう1ターン延長します。</strong>得点差がついた時点で試合終了となります。</div>`:''}
-    ${S.tlTieExtend?`<div style="background:#F4F7E8;border:1.5px solid #C5D89B;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#4a5d16;">🔁 <strong>${TURN_LIMIT}ターン終了時点で同点のため延長します。</strong>得点差がついた時点でセット終了となります。</div>`:''}
-    ${S.turnLimit&&displayTurnNum===TURN_LIMIT-1&&!S.tlTieExtend?`<div style="background:#FEE2E2;border:1.5px solid #fca5a5;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#b91c1c;">⚠️ <strong>残り2ターンです</strong></div>`:''}
-    ${S.turnLimit&&displayTurnNum===TURN_LIMIT&&!S.tlTieExtend?`<div style="background:#FEE2E2;border:1.5px solid #fca5a5;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#b91c1c;">⚠️ <strong>最終ターンです</strong></div>`:''}
+    ${S.tlTieExtend?`<div style="background:#F4F7E8;border:1.5px solid #C5D89B;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#4a5d16;">🔁 <strong>${curTL_()}ターン終了時点で同点のため延長します。</strong>得点差がついた時点でセット終了となります。</div>`:''}
+    ${S.turnLimit&&displayTurnNum===curTL_()-1&&!S.tlTieExtend?`<div style="background:#FEE2E2;border:1.5px solid #fca5a5;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#b91c1c;">⚠️ <strong>残り2ターンです</strong></div>`:''}
+    ${S.turnLimit&&displayTurnNum===curTL_()&&!S.tlTieExtend?`<div style="background:#FEE2E2;border:1.5px solid #fca5a5;border-radius:10px;padding:10px 12px;margin-bottom:10px;font-size:13px;color:#b91c1c;">⚠️ <strong>最終ターンです</strong></div>`:''}
     ${S.showHist&&hasPrev?histTbl(S.cur):''}
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
       ${[0,1].map(i=>{
@@ -4945,7 +4950,7 @@ function ruleRowsHtml(rules,prefix,opts){
       ${reorder}
       <div style="flex:1;">
         <div style="font-size:13px;font-weight:600;">${r.code} ${r.name?'/ '+r.name:''}</div>
-        <div style="font-size:12px;color:#1D9E75;">${r.fmt==='best2'?'2先':r.fmt==='best3'?'3先':'表裏'}${r.turnLimit?' 12T':''}　${r.playerMin}〜${r.playerMax>=99?'∞':r.playerMax}人</div>
+        <div style="font-size:12px;color:#1D9E75;">${r.fmt==='best2'?'2先':r.fmt==='best3'?'3先':'表裏'}${tlTurns_(r.turnLimit)?' '+tlTurns_(r.turnLimit)+'T':''}　${r.playerMin}〜${r.playerMax>=99?'∞':r.playerMax}人</div>
       </div>
       <button class="btn btn-gray btn-xs admin-edit-rule" data-prefix="${prefix}" data-idx="${i}" style="padding:3px 8px;">編集</button>
       <button class="btn btn-red-o btn-xs admin-del-rule" data-prefix="${prefix}" data-idx="${i}" style="padding:3px 8px;">削除</button>
@@ -5420,7 +5425,9 @@ function showRuleModal(prefix,idx){
       <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">名称（任意）</div><input type="text" id="m-name" value="${r.name}" placeholder="例: 予選"/></div>
       <div><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">試合形式</div>
         <select id="m-fmt"><option value="best2" ${r.fmt==='best2'?'selected':''}>2先</option><option value="best3" ${r.fmt==='best3'?'selected':''}>3先</option><option value="round2" ${r.fmt==='round2'?'selected':''}>表裏</option></select></div>
-      <div><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="m-tl" ${r.turnLimit?'checked':''} style="width:auto;accent-color:#1D9E75;"/><span style="font-size:14px;">12ターン制限</span></label></div>
+      <div><label style="display:flex;align-items:center;gap:8px;cursor:pointer;"><input type="checkbox" id="m-tl" ${tlTurns_(r.turnLimit)===12?'checked':''} style="width:auto;accent-color:#1D9E75;"/><span style="font-size:14px;">12ターン制限</span></label>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:6px;"><input type="checkbox" id="m-tl10" ${tlTurns_(r.turnLimit)===10?'checked':''} style="width:auto;accent-color:#1D9E75;"/><span style="font-size:14px;">10ターン制限</span></label>
+        <div style="font-size:11px;color:#9ca3af;margin-top:3px;">どちらか1つだけ選べます。どちらも外すとターン制限なし。</div></div>
       <div style="display:flex;gap:10px;">
         <div style="flex:1;"><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">最小人数</div><input type="text" id="m-pmin" value="${r.playerMin}" style="text-align:center;"/></div>
         <div style="flex:1;"><div style="font-size:13px;color:#6b7280;margin-bottom:4px;">最大人数</div><input type="text" id="m-pmax" value="${r.playerMax>=99?'∞':r.playerMax}" style="text-align:center;"/></div>
@@ -5433,6 +5440,9 @@ function showRuleModal(prefix,idx){
   </div>`;
   document.body.appendChild(overlay);
   document.getElementById('m-cancel').onclick=()=>document.body.removeChild(overlay);
+  // 【1-8】12ターンと10ターンは、どちらか1つだけ
+  const _tl12=document.getElementById('m-tl'),_tl10=document.getElementById('m-tl10');
+  if(_tl12&&_tl10){_tl12.onchange=()=>{if(_tl12.checked)_tl10.checked=false;};_tl10.onchange=()=>{if(_tl10.checked)_tl12.checked=false;};}
   document.getElementById('m-save').onclick=()=>{
     const code=document.getElementById('m-code').value.trim();
     if(!code){alert('コードを入力してください');return;}
@@ -5441,7 +5451,7 @@ function showRuleModal(prefix,idx){
       code,
       name:document.getElementById('m-name').value.trim(),
       fmt:document.getElementById('m-fmt').value,
-      turnLimit:document.getElementById('m-tl').checked,
+      turnLimit:document.getElementById('m-tl10').checked?10:(document.getElementById('m-tl').checked?12:false),   // 【1-8】10＝10ターン／12＝12ターン／false＝なし
       playerMin:parseInt(document.getElementById('m-pmin').value)||2,
       playerMax:pmaxVal==='∞'||pmaxVal===''?99:(parseInt(pmaxVal)||4)
     };
@@ -10894,7 +10904,7 @@ function rMatchConfirm(){
   if(!d)return'<div style="padding:20px;">データなし</div>';
   if(S._practice)return rPracticeConfirm_(d);   // 【1-8】練習モード
   const rule=d.rule;
-  const fmt=rule?`${rule.fmt==='best2'?'2先':rule.fmt==='best3'?'3先':'表裏'}${rule.turnLimit?' / 12T制限':''}　${rule.playerMin}〜${rule.playerMax>=99?'∞':rule.playerMax}人`:'設定なし';
+  const fmt=rule?`${rule.fmt==='best2'?'2先':rule.fmt==='best3'?'3先':'表裏'}${tlTurns_(rule.turnLimit)?' / '+tlTurns_(rule.turnLimit)+'T制限':''}　${rule.playerMin}〜${rule.playerMax>=99?'∞':rule.playerMax}人`:'設定なし';
   const round=d.round||'';
   // 大会データから試合区分・トーナメント名を取得
   const tourSrc=d.tour||(activeTour()||{matchRules:[],tourneyRules:[]});
@@ -11109,7 +11119,7 @@ function bind(){
     d.addEventListener('toggle',()=>{S._accOpen=S._accOpen||{};S._accOpen[k]=d.open;});
   });
   app.querySelectorAll('input[name="fmt"]').forEach(el=>{el.addEventListener('change',e=>{S.fmt=e.target.value;render();});});
-  app.querySelectorAll('input[name="tl"]').forEach(el=>{el.addEventListener('change',e=>{S.turnLimit=e.target.value==='12';render();});});
+  app.querySelectorAll('input[name="tl"]').forEach(el=>{el.addEventListener('change',e=>{S.turnLimit=e.target.value==='12'?12:(e.target.value==='10'?10:false);render();});});
   // 投擲人数 min/max ボタン
   const bpmn_=document.getElementById('btn-pm-min-');if(bpmn_)bpmn_.onclick=()=>{if(S.playerMin>1)S.playerMin--;render();};
   const bpmn_p=document.getElementById('btn-pm-min+');if(bpmn_p)bpmn_p.onclick=()=>{if(S.playerMin<S.playerMax&&S.playerMin<12)S.playerMin++;render();};
@@ -13260,12 +13270,12 @@ function bind(){
       const sc0=cset.teams[0].sc,sc1=cset.teams[1].sc;
       const fti=cset.ftid;
       const doneT=cset.teams[fti].throws.length;
-      if(S.turnLimit&&doneT>=TURN_LIMIT){
+      if(S.turnLimit&&doneT>=curTL_()){   // 【1-8】10ターンか12ターン
         if(!S.tlTieExtend){
           if(S.fmt!=='round2'&&sc0===sc1){S.tlTieExtend=true;render();return;}
-          processTurnLimitSetEnd(false);return; // 通常終了（12T）
+          processTurnLimitSetEnd(false);return; // 通常終了（10T／12T）
         } else {
-          if(sc0!==sc1){processTurnLimitSetEnd(true);return;} // 延長終了（13T）
+          if(sc0!==sc1){processTurnLimitSetEnd(true);return;} // 延長終了（11T〜／13T〜）
           render();return;
         }
       }
