@@ -120,7 +120,7 @@ const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1794534068';
+const APP_BUILD='1794585317';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -7648,7 +7648,8 @@ function renderSystemChart(ch,editable,mark){   // 【2026-10-26】mark={c,r} �
     if(off+span>nCols)off=Math.max(0,nCols-span);
     const leadCells=Math.min(Math.max(0,totalGrid-barCells),2*off);
     if(leadCells>0)h+=`<td colspan="${leadCells}"></td>`;
-    h+=`<td data-prelim="${i}" colspan="${barCells}" style="background:${pc.bg};border:1px solid ${pc.bd};text-align:center;padding:8px;color:${pc.tx};font-weight:600;">${scEsc(pname)}</td>`;
+    const _pm=!!(mark&&mark.prelim===i);   // 【1-8】予選のあいだの「いまここ」
+    h+=`<td data-prelim="${i}" colspan="${barCells}" style="${_pm?'outline:3px solid #f59e0b;outline-offset:1px;':''}background:${pc.bg};border:1px solid ${pc.bd};text-align:center;padding:8px;color:${pc.tx};font-weight:600;">${_pm?'<div style="font-size:9px;font-weight:800;color:#b45309;">いまここ</div>':''}${scEsc(pname)}</td>`;
     const usedCells=leadCells+barCells;
     if(usedCells<totalGrid)h+=`<td colspan="${totalGrid-usedCells}"></td>`;
     h+='</tr>';
@@ -10250,6 +10251,59 @@ function posByeHome_(tour,tn,rd,prevs,teamNo,byeCell,mc){
   }
   return null;
 }
+/* 【1-8】一次予選のあいだの「いまの試合」の決め方。
+   予選①②③の対戦表は最初にまとめて配信されるので、「試合区分の番号が一番大きい試合」を選ぶと、
+   予選の最中もずっと予選③が出てしまっていた。そこで予選のあいだ（そのチームの試合が一次予選だけのあいだ）は、
+     ・時間：タイムスケジュールで開始時間を過ぎた予選のうち、一番あとのもの（大会の日だけ）
+     ・結果：まだ結果が届いていない予選のうち、一番前のもの（全部届いていれば最後の予選）
+   の、あとのほうを「いまの試合」にする（予選①→②→③の順に進む）。
+   トーナメントに入ってからは、これまでどおり一番新しい試合。 */
+function posInDay_(tour,now){
+  const dn=t=>t.getFullYear()*10000+(t.getMonth()+1)*100+t.getDate();
+  const pd=x=>{if(!x)return null;const t=new Date(x);return isNaN(t)?null:dn(t);};
+  const today=dn(now),ds=pd(tour&&tour.eventPeriodStart),de=pd(tour&&tour.eventPeriodEnd);
+  return (ds==null||today>=ds)&&(de==null||today<=de);
+}
+/* 予選の開始時間。名前で見つからなければ、タイムスケジュールの「予選」の行（二次予選を除く）の何番目かで探す */
+function posPrelimTime_(tour,sched,mc){
+  const t=posTimeOf_(sched,'','',posMatchName_(tour,mc));
+  if(t)return t;
+  const k=prelimCodes_(tour).indexOf(String(mc));
+  const rows=(sched||[]).filter(x=>x&&x.name&&x.time&&/予選/.test(String(x.name))&&!/二次/.test(String(x.name)));
+  return (k>=0&&rows[k])?String(rows[k].time):'';
+}
+function posPrelimPick_(tour,teamNo,pre,sched,now){
+  now=now||new Date();
+  let ti=-1;
+  if(posInDay_(tour,now)){
+    const cur=now.getHours()*60+now.getMinutes();
+    const seen={};
+    pre.forEach((m,i)=>{
+      const a=schedMin_(posPrelimTime_(tour,sched,m.matchId.split('_')[2]||''));
+      if(a==null||seen[a])return;   // 同じ時間の予選が並ぶとき（「予選①〜③」の1行など）は、最初のものだけ
+      seen[a]=1;
+      if(a<=cur)ti=i;
+    });
+  }
+  let di=pre.findIndex(m=>!posResultOf_(m.matchId,teamNo,tour));
+  if(di<0)di=pre.length-1;
+  return pre[Math.max(ti,di)];
+}
+/* 試合システム図の予選のバーのうち、その試合区分のもの（「いまここ」を付ける）。{prelim:i}／null */
+function posPrelimMark_(tour,mc){
+  const ch=tour&&tour.systemChart;
+  const ps=(ch&&ch.prelims)||[];
+  if(!ps.length)return null;
+  const mn=posNorm_(posMatchName_(tour,mc));
+  let i=mn?ps.findIndex(x=>posNorm_(scPrelimName(x))===mn):-1;
+  if(i<0&&isFirstPrelimCode_(tour,mc)){
+    const k=prelimCodes_(tour).indexOf(String(mc));
+    const first=[];ps.forEach((x,j)=>{if(!/二次/.test(String(scPrelimName(x))))first.push(j);});
+    if(k>=0&&first.length===prelimCodes_(tour).length)i=first[k];
+    else if(first.length===1)i=first[0];
+  }
+  return i>=0?{prelim:i}:null;
+}
 /* そのチームの現在地をまとめる */
 function teamPosition_(tour,teamNo,sched){
   if(!tour||!teamNo)return null;
@@ -10264,6 +10318,12 @@ function teamPosition_(tour,teamNo,sched){
   // 同じ試合区分に「不戦勝」の行と不戦勝交流戦があるときは、不戦勝交流戦を先に見る
   const byeOf=m=>posIsBye_(tour,String(m.tourneyCode||''))?1:0;
   mine.sort((a,b)=>(mcOf(b)-mcOf(a))||(byeOf(b)-byeOf(a)));
+  // 【1-8】一次予選のあいだは、時間と結果で予選①→②→③の順に進める（上の posPrelimPick_）
+  if(mine.every(x=>isFirstPrelimCode_(tour,x.matchId.split('_')[2]||''))){
+    const pre=mine.slice().sort((a,b)=>mcOf(a)-mcOf(b));
+    const pick=posPrelimPick_(tour,teamNo,pre,sched);
+    if(pick&&pick!==mine[0]){mine.splice(mine.indexOf(pick),1);mine.unshift(pick);}
+  }
   const m=mine[0];
   const parts=m.matchId.split('_');
   const mc=parts[2]||'',tc=String(m.tourneyCode||'');
@@ -10305,7 +10365,7 @@ function teamPosition_(tour,teamNo,sched){
   const isPre=!(tn&&rd);
   const pc=isPre?null:posCellOf_(tour,mc,tc);
   const res=posResultOf_(m.matchId,teamNo,tour);
-  const out={curLabel:curLabel,mark:pc?{c:pc.c,r:pc.r}:null};
+  const out={curLabel:curLabel,mark:pc?{c:pc.c,r:pc.r}:(isPre?posPrelimMark_(tour,mc):null)};   // 【1-8】予選は予選のバーに「いまここ」
   if(!res){
     const opp=sameNo_(m.teamA,teamNo)?m.teamB:m.teamA;
     const ot=(tour.teams||[]).find(t=>sameNo_(t.id,opp));
@@ -10526,6 +10586,14 @@ function rCourtSearch(){
     } else {
       /* 【2026-10-26】結果送信済みの試合は、これからの試合より下へ（それぞれの中の並び順は今までどおり） */
       const _ordered=results.filter(r=>!sentResultOf_(r.matchId)).concat(results.filter(r=>sentResultOf_(r.matchId)));
+      /* 【1-8】そのチームの「いまの試合」（ホームの「現在：」と同じ決め方）のカードに印を付ける */
+      let _nowMid='';
+      try{
+        if(q.teamNo&&_csT&&S._posReady===_csT.eventCode+'|'+pad3s_(q.teamNo)){
+          const _pp=teamPosition_(_csT,q.teamNo,S._posSched||[]);
+          if(_pp&&_pp.next&&_pp.next.known)_nowMid=_pp.next.matchId||'';
+        }
+      }catch(e){}
       resultHtml=_ordered.map(r=>{
         const teamAInfo=(tourSrc.teams||[]).find(t=>t.id===r.teamA);
         const teamBInfo=(tourSrc.teams||[]).find(t=>t.id===r.teamB);
@@ -10539,8 +10607,10 @@ function rCourtSearch(){
              「この試合を開始する」の代わりに「送信済みの結果を確認」を出す。 */
         const _sent=sentResultOf_(r.matchId);
         const _sentOpen=!!(S._csSentOpen&&S._csSentOpen[r.matchId]);
-        return`<div class="card" style="padding:14px;margin-bottom:10px;${_sent?'background:#eceef1;border-color:#d5d9df;':''}">
+        const _isNow=!_sent&&r.matchId===_nowMid;
+        return`<div class="card" style="padding:14px;margin-bottom:10px;${_sent?'background:#eceef1;border-color:#d5d9df;':''}${_isNow?'border:2px solid #f59e0b;':''}">
           ${_sent?`<div style="display:inline-block;font-size:11px;font-weight:800;color:#fff;background:#6b7280;border-radius:99px;padding:3px 10px;margin-bottom:8px;">✅ 結果送信済み</div>`:''}
+          ${_isNow?`<div style="display:inline-block;font-size:11px;font-weight:800;color:#fff;background:#f59e0b;border-radius:99px;padding:3px 10px;margin-bottom:8px;">いまの試合</div>`:''}
           <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px;">
             <div style="background:${_sent?'#9ca3af':'#23AD82'};color:#fff;border-radius:10px;padding:8px 14px;text-align:center;min-width:64px;">
               <div style="font-size:11px;opacity:0.85;">コート</div>
