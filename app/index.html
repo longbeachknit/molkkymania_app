@@ -120,7 +120,7 @@ const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1794585317';
+const APP_BUILD='1795602524';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -544,7 +544,10 @@ async function sbFetchStamp(path){
 async function sbFetchDoc(eventCode,kind){
   const f=sbEventFilter(eventCode);
   if(!f)throw new Error('大会コードが空です');
-  const q=f+'&kind=eq.'+encodeURIComponent(kind);
+  /* 【1-8 追記5】大会コードだけ（場所なし）で探すときは、いちばん新しく配信されたものを使う。
+     大会の場所をあとから変えて配信し直すと、古い場所のぶん（例：01_0017）が残る。
+     順番を決めずに1件だけ取ると、古いほうが返ってきて「大阪なのに川崎」と出ていた。 */
+  const q=f+'&kind=eq.'+encodeURIComponent(kind)+(String(eventCode).indexOf('_')<0?'&order=updated_at.desc':'');
   const lsKey=q;
   const cached=lsDocGet(lsKey);
   try{
@@ -666,12 +669,15 @@ async function fetchSettingsJson(eventCode,useRaw){
 
 
 async function syncSettingsFromGitHub(eventCode,useRaw){
-  const data=await fetchSettingsJson(eventCode,useRaw);
-  if(!data)return false;
   // eventCodeは "01_0601" 形式の場合がある。venueCode/eventCodeに正規化する
   const parts=String(eventCode).split('_');
-  const normVenue=parts.length>=2?parts[0]:(data.venueCode||'');
   const normEvent=parts.length>=2?parts[1]:String(eventCode);
+  /* 【1-8 追記5】大会コードは場所をまたいで1つだけ（コードの重複チェックもそう）。
+     なので設定は「大会コード」で探し、いちばん新しく配信されたものを使う。
+     場所の番号つき（01_0017）で読むと、場所を変える前の古い配信を読んでしまうため */
+  const data=await fetchSettingsJson(normEvent,useRaw);
+  if(!data)return false;
+  const normVenue=String(data.venueCode||'')||(parts.length>=2?parts[0]:'');
   const wantFile=toJsonFileCode(normEvent);
   if(!AD.tournaments)AD.tournaments=[];
   // 【重複防止】同じ大会ID（配信ファイルが同じ）が既にあれば更新、無ければ新規作成。
@@ -685,6 +691,10 @@ async function syncSettingsFromGitHub(eventCode,useRaw){
     AD.tournaments.push(tour);
   }
   // 配信内容で上書き（既存でも新規でも同じ処理＝重複を作らず内容だけ更新）
+  /* 【1-8 追記5】場所も配信に合わせる。以前はここを書き換えなかったため、
+     別の端末で一度「川崎」で取り込んだ大会は、大阪に直して配信し直しても川崎のままだった
+     （場所の表示だけでなく、対戦表や結果を読みに行く先も古い場所のままになっていた） */
+  if(normVenue)tour.venueCode=normVenue;
   if(data.eventName!==undefined)tour.eventName=data.eventName;
   if(data.displayName!==undefined)tour.displayName=data.displayName;
   if(data.priority!==undefined)tour.priority=data.priority;
@@ -3548,10 +3558,11 @@ function loadEventMeta_(){
   if(_evMeta_)return Promise.resolve(_evMeta_);
   if(_evMetaP_)return _evMetaP_;
   loadCategories_();   // 【2026-10-29】カテゴリーの色・名前も読んでおく
-  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,b1:payload->>bracket1Name,b2:payload->>bracket2Name,nm:payload->>nameMode,priv:payload->>privateOnly,ph:payload->>privatePwHash',
+  _evMetaP_=fetch(SB_URL+'/rest/v1/event_docs?kind=eq.settings&select=event_key,ua:updated_at,name:payload->>eventName,start:payload->>eventPeriodStart,vname:payload->venue->>name,vcolor:payload->venue->>themeColor,ccode:payload->>categoryCode,cname:payload->category->>name,ccolor:payload->category->>color,b1:payload->>bracket1Name,b2:payload->>bracket2Name,nm:payload->>nameMode,priv:payload->>privateOnly,ph:payload->>privatePwHash',
       {cache:'no-store',headers:sbHeaders()})
     .then(r=>r.ok?r.json():[])
-    .then(rows=>{const m={};(rows||[]).forEach(r=>{if(r&&r.event_key)m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
+    /* 【1-8 追記5】同じ大会コードが2つの場所に残っているとき（場所を変えて配信し直した）は、新しいほうだけにする（過去大会に2つ並ばないように） */
+    .then(rows=>{const m={},best={};(rows||[]).forEach(r=>{if(!r||!r.event_key)return;const ec=String(r.event_key).split('_').slice(1).join('_')||r.event_key;const o=best[ec];if(o&&String(o.ua||'')>=String(r.ua||''))return;if(o)delete m[o.event_key];best[ec]=r;m[r.event_key]=r;});_evMeta_=m;_evMetaP_=null;return m;})
     .catch(()=>{_evMetaP_=null;return {};});
   return _evMetaP_;
 }
