@@ -120,7 +120,7 @@ const APP_VERSION_FALLBACK='1_8';
 // ===== 【2026-10-30】新しい版のお知らせ =====
 // APP_BUILD は publish_app.py が公開するときに「公開した時刻」へ置きかえる（手で書き換えない）。
 // 同じ時刻を app/version.json にも置くので、それが自分より新しければホームの一番上にボタンを出す。
-const APP_BUILD='1795602524';
+const APP_BUILD='1795836843';
 let _newBuild_=false,_buildChkAt_=0;
 function checkNewBuild_(){
   if(!/^\d+$/.test(APP_BUILD)||location.protocol==='file:')return;   // 手元で開いたときは確かめない
@@ -1134,7 +1134,7 @@ async function loadSentResults_(tour,force){
     const hd={'apikey':SB_ANON,'Authorization':'Bearer '+SB_ANON};
     const sheet={};let confirmed=false,finalRanks=[];
     try{
-      const r2=await fetch(SB_URL+'/rest/v1/sheet_results?event_key=eq.'+encodeURIComponent(key)+'&select=match_id,team_no,v1,v2',{cache:'no-store',headers:hd});
+      const r2=await fetch(SB_URL+'/rest/v1/sheet_results?event_key=eq.'+encodeURIComponent(key)+'&select=match_id,team_no,v1,v2,combined_id',{cache:'no-store',headers:hd});   // 【1-8 追記6】組み合わせ（combined_id）も読む。以前は読んでいなかったので、運営が対戦相手を差し替えた試合を組み立て直せなかった
       if(r2.ok)((await r2.json())||[]).forEach(r=>{(sheet[r.match_id]=sheet[r.match_id]||[]).push(r);});
       // 確定予選順位（対戦表の「確定予選順位を配信」）。1件以上あれば確定
       const r3=await fetch(SB_URL+'/rest/v1/sheet_result_events?event_key=eq.'+encodeURIComponent(key)+'&select=prelim_confirmed,final_ranks',{cache:'no-store',headers:hd});
@@ -1194,10 +1194,14 @@ function sentMatchCards_(tour){
   const key=sbEventKeyOf_(tour);
   if(!key||_sentRes.key!==key)return [];
   const out={};
+  /* 【1-8 追記6】運営（結果反映シート）が点数つきで送った試合は fromSheet の印をつける。
+     対戦表を配信したあとで運営が対戦相手を差し替えた試合（例：026対031 → 026対029）は、こちらが正しい組み合わせ */
+  const isNum=v=>v!=null&&/^\d+$/.test(String(v).trim());
   Object.keys(_sentRes.sheet||{}).forEach(mid=>{
-    const r=(_sentRes.sheet[mid]||[]).find(x=>x.combined_id);
+    const rows=_sentRes.sheet[mid]||[];
+    const r=rows.find(x=>x.combined_id);
     const c=r?cardFromCombinedId_(r.combined_id):null;
-    if(c)out[c.matchId]=c;
+    if(c){if(rows.some(x=>isNum(x.v1)||isNum(x.v2)))c.fromSheet=true;out[c.matchId]=c;}
   });
   Object.keys(_sentRes.map||{}).forEach(mid=>{
     if(out[mid])return;
@@ -1229,7 +1233,8 @@ function computePrelim_(tour){
   if(!codes.length||!tTeams.length)return null;
   const mm={};
   ((tour&&tour.matches)||[]).forEach(m=>{const c=String(m.matchId||'').split('_')[2];if(codes.indexOf(c)>=0)mm[m.matchId]={matchId:m.matchId,teamA:m.teamA,teamB:m.teamB};});
-  sentMatchCards_(tour).forEach(m=>{const c=m.matchId.split('_')[2];if(codes.indexOf(c)>=0&&!mm[m.matchId])mm[m.matchId]=m;});
+  // 【1-8 追記6】運営が点数つきで送った試合は、配信した対戦表より運営の組み合わせを優先する（対戦相手の差し替えに対応）
+  sentMatchCards_(tour).forEach(m=>{const c=m.matchId.split('_')[2];if(codes.indexOf(c)>=0&&(!mm[m.matchId]||m.fromSheet))mm[m.matchId]=m;});
   const st={};
   const keyOf=no=>String(parseInt(no,10));
   tTeams.forEach(t=>{st[keyOf(t.id)]={teamNo:pad3s_(t.id),teamName:t.name||'',sets:0,wins:0,draws:0,losses:0,total:0};});
@@ -1640,10 +1645,15 @@ function findTourByScoreEvent(ec){
 function runCourtSearch(teamNo,matchCode){
   // 【1-5・8-7にそろえた】いま検索対象にしている大会の対戦カードから探す
   const _srcT=csTour()||{matches:[]};
-  const _base=_srcT.matches||[];
+  /* 【1-8 追記6】運営が点数つきで送った試合で、対戦相手が対戦表と違うときは、運営の組み合わせに差し替える（コートなどはそのまま） */
+  const _sc={};sentMatchCards_(_srcT).forEach(m=>{_sc[m.matchId]=m;});
+  const _base=(_srcT.matches||[]).map(m=>{const s=_sc[m.matchId];
+    if(!s||!s.fromSheet)return m;
+    const same=(sameNo_(s.teamA,m.teamA)&&sameNo_(s.teamB,m.teamB))||(sameNo_(s.teamA,m.teamB)&&sameNo_(s.teamB,m.teamA));
+    return same?m:Object.assign({},m,{teamA:s.teamA,teamB:s.teamB,combinedId:s.combinedId});});
   /* 【8-8】対戦表に無くても、結果が届いている試合（結果反映シート・アプリ）はカードを作り直して出す */
   const _have={};_base.forEach(m=>{_have[m.matchId]=true;});
-  const searchSrc=_base.concat(sentMatchCards_(_srcT).filter(m=>!_have[m.matchId]));
+  const searchSrc=_base.concat(Object.values(_sc).filter(m=>!_have[m.matchId]));
   const results=searchSrc.filter(m=>{
     const mparts=m.matchId.split('_');
     const mCode=mparts[2]||'';
